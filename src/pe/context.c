@@ -9,13 +9,31 @@
 
 #define $try_read_sized(into, size, file) \
   ({ \
-    auto nread = fread (into, (size), 1, (file)); \
+    auto nread = fread ((into), (size), 1, (file)); \
     if (nread) \
-      $trace_verbose ("reading " #size " (%" PRIu64 ") bytes", size); \
+      $trace_verbose ("read " #size " (%" PRIu64 ") bytes", size); \
     nread; \
   })
 #define $try_read_type(into, file) \
   $try_read_sized (&(into), sizeof (into), file)
+#define $try_read_asciz(into, max_length, file) \
+  ({ \
+    int c, nread; \
+    for (nread = 0; nread < (max_length); ++nread) \
+    { \
+      if ((c = fgetc (file)) == EOF) \
+      { \
+        nread = 0; \
+        break; \
+      } \
+      into[nread] = c; \
+      if (!c) \
+        break; \
+    } \
+    if (into[nread]) \
+      nread = 0; \
+    nread; \
+  })
 
 #define $offset_between_opthdr(memb1, memb2) \
   $offset_between (struct image_optional_header, memb1, memb2)
@@ -29,6 +47,19 @@ struct _pe_context
     struct image_section_header* array;
     size_t size;
   } section_headers;
+  struct
+  {
+    struct image_export_directory* table;
+  } exports;
+  struct
+  {
+    struct
+    {
+      struct image_import_descriptor* array;
+      char** names;
+      size_t size;
+    } desc;
+  } imports;
 };
 
 static bool
@@ -62,10 +93,14 @@ validate_nt_headers (pe_context_t pe_context)
   switch (optional_header.magic)
   {
     case IMAGE_NT_OPTIONAL_HDR32_MAGIC:
-      $trace_debug ("file identified as 32-bit");
+      $trace_debug (
+        "file identified as 32-bit, image base: 0x%" PRIx32,
+        optional_header.bases._32.image_base);
       break;
     case IMAGE_NT_OPTIONAL_HDR64_MAGIC:
-      $trace_debug ("file identified as 64-bit");
+      $trace_debug (
+        "file identified as 64-bit, image base: 0x%" PRIx64,
+        optional_header.bases._64.image_base);
       break;
     default:
       $trace_debug (
@@ -77,7 +112,129 @@ validate_nt_headers (pe_context_t pe_context)
   return true;
 }
 
-pe_context_t
+static struct image_section_header*
+find_section_by_rva (pe_context_t pe_context, uint64_t rva)
+{
+  auto nr_sections = pe_context->section_headers.size;
+  auto section_headers = pe_context->section_headers.array;
+  for (size_t i = 0; i < nr_sections; ++i)
+  {
+    auto section = &section_headers[i];
+    if ((section->virtual_address <= rva)
+        && (rva < section->virtual_address + section->misc.virtual_size))
+      return section;
+  }
+  return NULL;
+}
+
+static uint64_t
+find_fileoffs_by_rva (
+  pe_context_t pe_context, struct image_section_header** out, uint64_t rva)
+{
+  auto section = find_section_by_rva (pe_context, rva);
+  if (section == NULL)
+    return 0;
+  if (out != NULL)
+    *out = section;
+  return section->pointer_to_raw_data + (rva - section->virtual_address);
+}
+
+static bool
+read_import_descriptors (pe_context_t pe_context, FILE* file, uint32_t offset)
+{
+  fseek (file, offset, SEEK_SET);
+  
+  /* if we're parsing strictly, then we believe the size given by the
+   * directory entry, otherwise we search until there's a null descriptor
+   * to mark the end of the table
+   */
+  auto desc_size = sizeof (struct image_import_descriptor);
+#ifdef PE_STRICT
+  auto optional_header = pe_context->nt_header.optional_header;
+  auto entry = optional_header.data_directory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+
+  pe_context->imports.size = entry.size / desc_size - 1;
+  pe_context->imports.descriptors
+    = calloc (desc_size, pe_context->imports.size);
+  if (pe_context->imports.descriptors == NULL)
+    $abort ("failed to allocate import descriptor table");
+  if (!$try_read_sized (
+      pe_context->imports.descriptors, desc_size * pe_context->imports.size,
+      file))
+  {
+    $trace_debug ("failed to read import descriptor table");
+    free (pe_context->imports.descriptors);
+    pe_context->imports.descriptors = NULL;
+    return false;
+  }
+#else
+  struct image_import_descriptor desc;
+  while (true)
+  {
+    if (!$try_read_type (desc, file))
+    {
+      $trace_debug ("failed to read import descriptor");
+      return false;
+    }
+    if (!desc.characteristics)
+      break;  /* sentinel value */
+  }
+  pe_context->imports.desc.size = (ftell (file) - offset) / desc_size - 1;
+  pe_context->imports.desc.array
+    = calloc (desc_size, pe_context->imports.desc.size);
+  if (pe_context->imports.desc.array == NULL)
+    $abort ("failed to allocate import descriptor table");
+  fseek (file, offset, SEEK_SET);
+  if (!$try_read_sized (
+      pe_context->imports.desc.array, desc_size * pe_context->imports.desc.size,
+      file))
+  {
+    $trace_debug ("failed to read import descriptor table");
+    free (pe_context->imports.desc.array);
+    pe_context->imports.desc.array = NULL;
+    return false;
+  }
+#endif
+  $trace_debug ("read %zu import descriptors", pe_context->imports.desc.size);
+  pe_context->imports.desc.names
+    = calloc (sizeof (char*), pe_context->imports.desc.size);
+  if (pe_context->imports.desc.names == NULL)
+    $abort ("failed to allocate import descriptor name table");
+  for (size_t i = 0; i < pe_context->imports.desc.size; ++i)
+  {
+    auto import = pe_context->imports.desc.array[i];
+    char* import_name = calloc (sizeof (char), MAX_PATH);
+    if (import_name == NULL)
+      $abort ("failed to allocate import descriptor name");
+    struct image_section_header* section;
+    auto file_offset = find_fileoffs_by_rva (pe_context, &section, import.name);
+    if (!file_offset)
+    {
+      $trace_debug ("failed to find section containing import name");
+      free (import_name);
+      continue;
+    }
+    fseek (file, file_offset, SEEK_SET);
+    auto name_length = $try_read_asciz (import_name, MAX_PATH, file);
+    if (!name_length)
+    {
+      $trace_debug ("failed to read import descriptor name");
+      free (import_name);
+      continue;
+    }
+    $trace_debug (
+      "found import descriptor \"%s\" in: '%.8s' (file+%" PRIx64 ")",
+      import_name, section->name, file_offset);
+    import_name = reallocarray (import_name, sizeof (char), name_length + 1);
+    if (import_name == NULL)
+      $abort ("failed to reallocate import descriptor name");
+    pe_context->imports.desc.names[i] = import_name;
+  }
+
+  return true;
+}
+
+static pe_context_t
 pe_context$alloc (void)
 {
   auto pe_context = calloc (1, $ptrsize (pe_context_t));
@@ -90,7 +247,7 @@ pe_context$alloc (void)
 }
 
 pe_context_t
-pe_context$alloc_from_file (FILE* file)
+pe_context$from_file (FILE* file, uint8_t flags)
 {
   $trace_debug ("allocating PE context from file");
   auto pe_context = pe_context$alloc ();
@@ -171,9 +328,34 @@ pe_context$alloc_from_file (FILE* file)
   for (size_t i = 0; i < nr_sections; ++i)
   {
     auto section = section_headers[i];
-    $trace_verbose (
-      "section #%zu: %.8s at RVA: %" PRIx32 ", size: %" PRIx32,
-      i, section.name, section.virtual_address, section.misc.virtual_size);
+    $trace_debug (
+      "section '%.8s' at file offset %" PRIx32 " (virt. %" PRIx32 "), size %"
+      PRIu32 " bytes (virt. %" PRIu32 " bytes)",
+      section.name, section.pointer_to_raw_data, section.virtual_address,
+      section.size_of_raw_data, section.misc.virtual_size);
+  }
+
+  auto data_dir = optional_header->data_directory;
+  if (flags & PE_CONTEXT_LOAD_IMPORT_DIRECTORY)
+  {
+    auto import_entry = data_dir[IMAGE_DIRECTORY_ENTRY_IMPORT];
+    struct image_section_header* section;
+    auto file_offset
+      = find_fileoffs_by_rva (
+        pe_context, &section, import_entry.virtual_address);
+    if (!file_offset)
+    {
+      $trace_debug (
+        "invalid import descriptor RVA: %" PRIx32,
+        import_entry.virtual_address);
+      goto fail;
+    }
+    $trace_debug (
+      "found import descriptor table in: %.8s (file+%" PRIx64 ")",
+      section->name, file_offset);
+    fseek (file, file_offset, SEEK_SET);
+    if (!read_import_descriptors (pe_context, file, file_offset))
+      goto fail;
   }
 
   return pe_context;
@@ -189,5 +371,13 @@ void
 pe_context$free (pe_context_t pe_context)
 {
   $trace_alloc ("freeing PE context: %p", pe_context);
+  free (pe_context->section_headers.array);
+  auto import_descs = pe_context->imports.desc;
+  if (import_descs.array != NULL)
+  {
+    for (size_t i = 0; i < import_descs.size; ++i)
+      free (import_descs.names[i]);
+    free (import_descs.array);
+  }
   free (pe_context);
 }

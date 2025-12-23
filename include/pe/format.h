@@ -24,6 +24,8 @@
 #define IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT   (13)
 #define IMAGE_DIRECTORY_ENTRY_COM_DESCRIPTOR (14)
 
+#define MAX_PATH (260)
+
 #pragma pack(push, 1)
 
 struct image_dos_header
@@ -169,6 +171,34 @@ struct image_section_header
   uint16_t number_of_relocations;
   uint16_t number_of_linenumbers;
   uint32_t characteristics;
+};
+
+struct image_export_directory
+{
+  uint32_t characteristics;
+  uint32_t time_date_stamp;
+  uint16_t major_version;
+  uint16_t minor_version;
+  uint32_t name;
+  uint32_t base;
+  uint32_t number_of_functions;
+  uint32_t number_of_names;
+  uint32_t address_of_functions;
+  uint32_t address_of_names;
+  uint32_t address_of_name_ordinals;
+};
+
+struct image_import_descriptor
+{
+  union
+  {
+    uint32_t characteristics;
+    uint32_t original_first_thunk;
+  };
+  uint32_t time_date_stamp;
+  uint32_t forwarder_chain;
+  uint32_t name;
+  uint32_t first_thunk;
 };
 
 #pragma pack(pop)

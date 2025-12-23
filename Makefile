@@ -2,7 +2,7 @@ CC = clang
 OBJCOPY = objcopy
 
 COMMON_CFLAGS = -Wall -Werror -Wextra -Iinclude/ -I/mingw64/include/ \
-								-Wno-ignored-attributes
+								-Wno-ignored-attributes -DNO_TRACE_VERBOSE
 
 CFG_DEFS := $(foreach cfg,$(filter CFG_%,$(.VARIABLES)),-D$(cfg))
 LDLIBPATH := /mingw64/lib
