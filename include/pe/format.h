@@ -201,4 +201,10 @@ struct image_import_descriptor
   uint32_t first_thunk;
 };
 
+struct image_import_by_name
+{
+  uint16_t hint;
+  char name[0];
+};
+
 #pragma pack(pop)

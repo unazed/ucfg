@@ -2,10 +2,11 @@
 #include <stdlib.h>
 
 #include "pe/context.h"
-#include "generic.h"
 #include "pe/format.h"
+#include "generic.h"
 #include "stdio.h"
 #include "trace.h"
+#include "platform.h"
 
 #define $try_read_sized(into, size, file) \
   ({ \
@@ -19,7 +20,7 @@
 #define $try_read_asciz(into, max_length, file) \
   ({ \
     int c, nread; \
-    for (nread = 0; nread < (max_length); ++nread) \
+    for (nread = 0; nread < (max_length) - 1; ++nread) \
     { \
       if ((c = fgetc (file)) == EOF) \
       { \
@@ -30,8 +31,6 @@
       if (!c) \
         break; \
     } \
-    if (into[nread]) \
-      nread = 0; \
     nread; \
   })
 
@@ -53,14 +52,28 @@ struct _pe_context
   } exports;
   struct
   {
-    struct
+    struct _import_entry
     {
-      struct image_import_descriptor* array;
-      char** names;
-      size_t size;
-    } desc;
+      struct image_import_descriptor descriptor;
+      char* module_name;
+      struct
+      {
+        char* name;
+        uint64_t rva;
+      } *funcs;
+      size_t nfuncs;
+    } *array;
+    size_t size;
   } imports;
 };
+
+static bool
+is_image_x64 (pe_context_t pe_context)
+{
+  return (
+    pe_context->nt_header.optional_header.magic == IMAGE_NT_OPTIONAL_HDR64_MAGIC
+  );
+}
 
 static bool
 validate_dos_header (pe_context_t pe_context)
@@ -140,97 +153,140 @@ find_fileoffs_by_rva (
 }
 
 static bool
-read_import_descriptors (pe_context_t pe_context, FILE* file, uint32_t offset)
+resolve_imports (
+  pe_context_t pe_context, FILE* file, struct _import_entry* ientry)
 {
-  fseek (file, offset, SEEK_SET);
-  
-  /* if we're parsing strictly, then we believe the size given by the
-   * directory entry, otherwise we search until there's a null descriptor
-   * to mark the end of the table
-   */
-  auto desc_size = sizeof (struct image_import_descriptor);
-#ifdef PE_STRICT
-  auto optional_header = pe_context->nt_header.optional_header;
-  auto entry = optional_header.data_directory[IMAGE_DIRECTORY_ENTRY_IMPORT];
-
-  pe_context->imports.size = entry.size / desc_size - 1;
-  pe_context->imports.descriptors
-    = calloc (desc_size, pe_context->imports.size);
-  if (pe_context->imports.descriptors == NULL)
-    $abort ("failed to allocate import descriptor table");
-  if (!$try_read_sized (
-      pe_context->imports.descriptors, desc_size * pe_context->imports.size,
-      file))
+  auto ilt_offset = find_fileoffs_by_rva (
+    pe_context, NULL, ientry->descriptor.original_first_thunk);
+  if (!ilt_offset)
   {
-    $trace_debug ("failed to read import descriptor table");
-    free (pe_context->imports.descriptors);
-    pe_context->imports.descriptors = NULL;
+    $trace_debug (
+      "failed to find ILT offset for module: '%s'", ientry->module_name);
     return false;
   }
-#else
-  struct image_import_descriptor desc;
-  while (true)
+
+  uint64_t size, rshift, msb_mask;
+  if (is_image_x64 (pe_context))
   {
-    if (!$try_read_type (desc, file))
+    size = sizeof (uint64_t);
+    rshift = 0;
+    msb_mask = 1ull << 63;
+  }
+  else
+  {
+    size = sizeof (uint32_t);
+    rshift = 32;
+    msb_mask = 1ull << 31;
+  }
+
+  for (size_t i = 0;; ++i)
+  {
+    fseek (file, ilt_offset + i * size, SEEK_SET);
+    uint64_t ilt_entry = 0;
+    if (!$try_read_sized (&ilt_entry, size, file))
+    {
+      $trace_debug (
+        "failed to read ILT entry for module: '%s'", ientry->module_name);
+      return false;
+    }
+    if (!ilt_entry)
+      break;
+    ilt_entry >>= rshift;
+    if (ilt_entry & msb_mask)
+      $trace_debug (
+        "reading ordinal: %s#%" PRIx16,
+        ientry->module_name, (uint16_t)ilt_entry);
+    else
+    {
+      auto hint_offset = find_fileoffs_by_rva(
+        pe_context, NULL, ilt_entry & 0x7fffffff);
+      if (!hint_offset)
+      {
+        $trace_debug ("failed to find hint/name offset for ILT");
+        continue;
+      }
+      struct image_import_by_name hint_name;
+      fseek (file, hint_offset, SEEK_SET);
+      if (!$try_read_type (hint_name, file))
+      {
+        $trace_debug ("failed to read hint/name offset for ILT");
+        continue;
+      }
+      char* func_name = calloc (sizeof (char), 256);
+      if (func_name == NULL)
+        $abort ("failed to allocate function name buffer");
+      auto nread = $try_read_asciz (func_name, 256, file);
+      if (!nread)
+      {
+        $trace_debug ("failed to read function name from hint/name");
+        free (func_name);
+        continue;
+      }
+      (void)realloc (func_name, nread + 1);
+      $trace_debug ("importing function (%s): %s@%" PRIx16, ientry->module_name, func_name, hint_name.hint);
+    }
+  }
+  return true;
+}
+
+static bool
+read_import_descriptors (pe_context_t pe_context, FILE* file, uint32_t offset)
+{
+  for (size_t i = 0;; ++i)
+  {
+    fseek (
+      file, offset + i * sizeof (struct image_import_descriptor), SEEK_SET);
+    struct _import_entry* entries = reallocarray (
+        pe_context->imports.array, sizeof (struct _import_entry),
+        ++pe_context->imports.size);
+    pe_context->imports.array = entries;
+    if (entries == NULL)
+      $abort ("failed to reallocate IDT entries tables");
+    auto ientry = &entries[pe_context->imports.size - 1];
+    if (!$try_read_type (ientry->descriptor, file))
     {
       $trace_debug ("failed to read import descriptor");
       return false;
     }
-    if (!desc.characteristics)
-      break;  /* sentinel value */
-  }
-  pe_context->imports.desc.size = (ftell (file) - offset) / desc_size - 1;
-  pe_context->imports.desc.array
-    = calloc (desc_size, pe_context->imports.desc.size);
-  if (pe_context->imports.desc.array == NULL)
-    $abort ("failed to allocate import descriptor table");
-  fseek (file, offset, SEEK_SET);
-  if (!$try_read_sized (
-      pe_context->imports.desc.array, desc_size * pe_context->imports.desc.size,
-      file))
-  {
-    $trace_debug ("failed to read import descriptor table");
-    free (pe_context->imports.desc.array);
-    pe_context->imports.desc.array = NULL;
-    return false;
-  }
-#endif
-  $trace_debug ("read %zu import descriptors", pe_context->imports.desc.size);
-  pe_context->imports.desc.names
-    = calloc (sizeof (char*), pe_context->imports.desc.size);
-  if (pe_context->imports.desc.names == NULL)
-    $abort ("failed to allocate import descriptor name table");
-  for (size_t i = 0; i < pe_context->imports.desc.size; ++i)
-  {
-    auto import = pe_context->imports.desc.array[i];
-    char* import_name = calloc (sizeof (char), MAX_PATH);
-    if (import_name == NULL)
-      $abort ("failed to allocate import descriptor name");
-    struct image_section_header* section;
-    auto file_offset = find_fileoffs_by_rva (pe_context, &section, import.name);
-    if (!file_offset)
+    if (!ientry->descriptor.characteristics)
+    {  /* sentinel descriptor */
+      if (pe_context->imports.size)
+        (void)reallocarray (
+          pe_context->imports.array, sizeof (struct _import_entry),
+          --pe_context->imports.size);
+      break;
+    }
+    auto name_offset = find_fileoffs_by_rva (
+      pe_context, NULL, ientry->descriptor.name);
+    if (!name_offset)
     {
-      $trace_debug ("failed to find section containing import name");
-      free (import_name);
+      $trace_debug ("failed to find IDT name");
+      continue; 
+    }
+    ientry->module_name = calloc (sizeof (char), MAX_PATH);
+    if (ientry->module_name == NULL)
+      $abort ("failed to allocate IDT module name");
+    fseek (file, name_offset, SEEK_SET);
+    auto nread = $try_read_asciz (ientry->module_name, MAX_PATH, file);
+    if (!nread)
+    {
+      $trace_debug ("failed to read IDT name");
+      free (ientry->module_name);
       continue;
     }
-    fseek (file, file_offset, SEEK_SET);
-    auto name_length = $try_read_asciz (import_name, MAX_PATH, file);
-    if (!name_length)
+    (void)realloc (ientry->module_name, nread);
+    pe_context->imports.array = entries;
+    if (!resolve_imports (pe_context, file, ientry))
     {
-      $trace_debug ("failed to read import descriptor name");
-      free (import_name);
+      $trace_debug (
+        "failed to resolve imports for module: %s", ientry->module_name);
+      free (ientry->module_name);
+      (void)reallocarray (
+        pe_context->imports.array, sizeof (struct _import_entry),
+        --pe_context->imports.size);
       continue;
     }
-    $trace_debug (
-      "found import descriptor \"%s\" in: '%.8s' (file+%" PRIx64 ")",
-      import_name, section->name, file_offset);
-    import_name = reallocarray (import_name, sizeof (char), name_length + 1);
-    if (import_name == NULL)
-      $abort ("failed to reallocate import descriptor name");
-    pe_context->imports.desc.names[i] = import_name;
   }
-
   return true;
 }
 
@@ -372,12 +428,5 @@ pe_context$free (pe_context_t pe_context)
 {
   $trace_alloc ("freeing PE context: %p", pe_context);
   free (pe_context->section_headers.array);
-  auto import_descs = pe_context->imports.desc;
-  if (import_descs.array != NULL)
-  {
-    for (size_t i = 0; i < import_descs.size; ++i)
-      free (import_descs.names[i]);
-    free (import_descs.array);
-  }
   free (pe_context);
 }

@@ -3,6 +3,7 @@ CompileFlags:
     - -IC:\Users\unaze\OneDrive\Desktop\test-capstone\include
     - -IE:\MSYS64\usr\include
     - -IE:\MSYS64\mingw64\include
+    - -IE:\MSYS64\usr\include\w32api
     - --target=x86_64-w64-mingw32
     - -Wall -Werror -Wextra
     - -Wno-ignored-attributes
