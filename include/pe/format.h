@@ -24,7 +24,8 @@
 #define IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT   (13)
 #define IMAGE_DIRECTORY_ENTRY_COM_DESCRIPTOR (14)
 
-#define MAX_PATH (260)
+#define MAX_PATH            (260)
+#define MAX_FUNCNAME_LENGTH (256)
 
 #pragma pack(push, 1)
 

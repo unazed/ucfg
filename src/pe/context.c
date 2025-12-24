@@ -1,5 +1,6 @@
 #include <stdbool.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "pe/context.h"
 #include "pe/format.h"
@@ -56,10 +57,11 @@ struct _pe_context
     {
       struct image_import_descriptor descriptor;
       char* module_name;
-      struct
+      void* module_base;
+      struct _import_func_entry
       {
         char* name;
-        uint64_t rva;
+        void* address;
       } *funcs;
       size_t nfuncs;
     } *array;
@@ -156,12 +158,20 @@ static bool
 resolve_imports (
   pe_context_t pe_context, FILE* file, struct _import_entry* ientry)
 {
+  $trace_alloc ("loading library handle: %s", ientry->module_name);
+  auto module = platform_load_library (ientry->module_name);
+  if (module == NULL)
+  {
+    $trace_debug ("failed to load module: %s", ientry->module_name);
+    return false;
+  }
+  ientry->module_base = module;
   auto ilt_offset = find_fileoffs_by_rva (
     pe_context, NULL, ientry->descriptor.original_first_thunk);
   if (!ilt_offset)
   {
     $trace_debug (
-      "failed to find ILT offset for module: '%s'", ientry->module_name);
+      "failed to find ILT offset for module: %s", ientry->module_name);
     return false;
   }
 
@@ -192,10 +202,23 @@ resolve_imports (
     if (!ilt_entry)
       break;
     ilt_entry >>= rshift;
+    $trace_alloc (
+      "(re-)allocating function entry table for %zu entries",
+      ientry->nfuncs + 1);
+    auto funcs = reallocarray (
+      ientry->funcs, sizeof (struct _import_func_entry), ++ientry->nfuncs);
+    if (funcs == NULL)
+      $abort ("failed to allocate import function array");
+    ientry->funcs = funcs;
+    auto fentry = &ientry->funcs[ientry->nfuncs - 1];
     if (ilt_entry & msb_mask)
+    {
+      /* TODO: import by ordinal */
       $trace_debug (
         "reading ordinal: %s#%" PRIx16,
         ientry->module_name, (uint16_t)ilt_entry);
+      __builtin_unimplemented ();
+    }
     else
     {
       auto hint_offset = find_fileoffs_by_rva(
@@ -203,28 +226,59 @@ resolve_imports (
       if (!hint_offset)
       {
         $trace_debug ("failed to find hint/name offset for ILT");
-        continue;
+        goto invalid_entry;
       }
       struct image_import_by_name hint_name;
       fseek (file, hint_offset, SEEK_SET);
       if (!$try_read_type (hint_name, file))
       {
         $trace_debug ("failed to read hint/name offset for ILT");
-        continue;
+        goto invalid_entry;
       }
-      char* func_name = calloc (sizeof (char), 256);
+      $trace_alloc (
+        "allocating buffer for function name (%d bytes)", MAX_FUNCNAME_LENGTH);
+      char* func_name = calloc (sizeof (char), MAX_FUNCNAME_LENGTH);
       if (func_name == NULL)
         $abort ("failed to allocate function name buffer");
-      auto nread = $try_read_asciz (func_name, 256, file);
+      auto nread = $try_read_asciz (func_name, MAX_FUNCNAME_LENGTH, file);
       if (!nread)
       {
         $trace_debug ("failed to read function name from hint/name");
         free (func_name);
-        continue;
+        goto invalid_entry;
       }
-      (void)realloc (func_name, nread + 1);
-      $trace_debug ("importing function (%s): %s@%" PRIx16, ientry->module_name, func_name, hint_name.hint);
+      $trace_alloc (
+        "downsizing buffer for function name to %d bytes", nread + 1);
+      void* resized = realloc (func_name, nread + 1);
+      if (resized == NULL)
+        $abort ("failed to resize function name");
+      func_name = resized;
+      $trace_debug (
+        "importing (%s): %s#%" PRIx16,
+        ientry->module_name, func_name, hint_name.hint);
+      auto func_address = platform_get_procedure (module, func_name);
+      if (func_address == NULL)
+      {
+        $trace_debug (
+          "failed to get function (%s): %s", ientry->module_name, func_name);
+        goto invalid_entry;
+      }
+      fentry->name = func_name;
+      fentry->address = func_address;
+      $trace_debug (
+        "found function (%s@%p): %s@%p",
+        ientry->module_name, module, fentry->name, func_address);
     }
+    continue;
+
+invalid_entry:
+    $trace_alloc (
+      "downsizing function entry table to %zu entries", ientry->nfuncs - 1);
+    funcs = reallocarray (
+      ientry->funcs, sizeof (struct _import_func_entry), --ientry->nfuncs);
+    if (funcs == NULL)
+      $abort ("failed to reallocate import function array");
+    ientry->funcs = funcs;
   }
   return true;
 }
@@ -236,13 +290,18 @@ read_import_descriptors (pe_context_t pe_context, FILE* file, uint32_t offset)
   {
     fseek (
       file, offset + i * sizeof (struct image_import_descriptor), SEEK_SET);
+    $trace_alloc (
+      "(re-)allocating import array for %zu entries",
+      pe_context->imports.size + 1);
     struct _import_entry* entries = reallocarray (
         pe_context->imports.array, sizeof (struct _import_entry),
         ++pe_context->imports.size);
-    pe_context->imports.array = entries;
     if (entries == NULL)
       $abort ("failed to reallocate IDT entries tables");
+    pe_context->imports.array = entries;
     auto ientry = &entries[pe_context->imports.size - 1];
+    /* NB: `reallocarray` doesn't zero memory like `calloc` :( */
+    memset (ientry, 0, sizeof (*ientry));
     if (!$try_read_type (ientry->descriptor, file))
     {
       $trace_debug ("failed to read import descriptor");
@@ -251,9 +310,17 @@ read_import_descriptors (pe_context_t pe_context, FILE* file, uint32_t offset)
     if (!ientry->descriptor.characteristics)
     {  /* sentinel descriptor */
       if (pe_context->imports.size)
-        (void)reallocarray (
+      {
+        $trace_alloc (
+          "downsizing import array to %zu entries",
+          pe_context->imports.size - 1);
+        void* resized = reallocarray (
           pe_context->imports.array, sizeof (struct _import_entry),
           --pe_context->imports.size);
+        if (resized == NULL)
+          $abort ("failed to resize import array");
+        pe_context->imports.array = resized;
+      }
       break;
     }
     auto name_offset = find_fileoffs_by_rva (
@@ -263,6 +330,7 @@ read_import_descriptors (pe_context_t pe_context, FILE* file, uint32_t offset)
       $trace_debug ("failed to find IDT name");
       continue; 
     }
+    $trace_alloc ("allocating module name (%d bytes)", MAX_PATH);
     ientry->module_name = calloc (sizeof (char), MAX_PATH);
     if (ientry->module_name == NULL)
       $abort ("failed to allocate IDT module name");
@@ -274,16 +342,26 @@ read_import_descriptors (pe_context_t pe_context, FILE* file, uint32_t offset)
       free (ientry->module_name);
       continue;
     }
-    (void)realloc (ientry->module_name, nread);
+    $trace_alloc ("downsizing module name to %d bytes", nread);
+    void* resized = realloc (ientry->module_name, nread);
+    if (resized == NULL)
+      $abort ("failed to resize module name");
+    ientry->module_name = resized;
     pe_context->imports.array = entries;
     if (!resolve_imports (pe_context, file, ientry))
     {
       $trace_debug (
         "failed to resolve imports for module: %s", ientry->module_name);
+      $trace_alloc (
+        "downsizing import array to %zu entries, and freeing module name",
+        pe_context->imports.size - 1);
       free (ientry->module_name);
-      (void)reallocarray (
+      resized = reallocarray (
         pe_context->imports.array, sizeof (struct _import_entry),
         --pe_context->imports.size);
+      if (resized == NULL)
+        $abort ("failed to resize import table");
+      pe_context->imports.array = resized;
       continue;
     }
   }
@@ -396,8 +474,7 @@ pe_context$from_file (FILE* file, uint8_t flags)
   {
     auto import_entry = data_dir[IMAGE_DIRECTORY_ENTRY_IMPORT];
     struct image_section_header* section;
-    auto file_offset
-      = find_fileoffs_by_rva (
+    auto file_offset = find_fileoffs_by_rva (
         pe_context, &section, import_entry.virtual_address);
     if (!file_offset)
     {
@@ -426,7 +503,25 @@ fail:
 void
 pe_context$free (pe_context_t pe_context)
 {
-  $trace_alloc ("freeing PE context: %p", pe_context);
+  $trace_alloc ("freeing import entries");
+  for (size_t i = 0; i < pe_context->imports.size; ++i)
+  {
+    auto ientry = pe_context->imports.array[i];
+    $trace_alloc (
+      "freeing function entry table for module: %s", ientry.module_name);
+    for (size_t j = 0; j < ientry.nfuncs; ++j)
+    {
+      auto func = ientry.funcs[j];
+      $trace_alloc ("\tfreeing function name: %s", func.name);
+      free (func.name);
+    }
+    platform_free_library (ientry.module_base);
+    free (ientry.funcs);
+    free (ientry.module_name);
+  }
+  free (pe_context->imports.array);
+  $trace_alloc ("freeing section headers");
   free (pe_context->section_headers.array);
+  $trace_alloc ("freeing PE context");
   free (pe_context);
 }
