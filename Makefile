@@ -3,6 +3,7 @@ OBJCOPY = objcopy
 
 COMMON_CFLAGS = -g -O0 -Wall -Werror -Wextra -Iinclude/ -I/mingw64/include/ \
 								-Wno-ignored-attributes -DNO_TRACE_VERBOSE -Wno-unused-function
+								
 
 CFG_DEFS := $(foreach cfg,$(filter CFG_%,$(.VARIABLES)),-D$(cfg))
 LDLIBPATH := /mingw64/lib

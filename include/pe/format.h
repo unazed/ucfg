@@ -189,6 +189,12 @@ struct image_export_directory
   uint32_t address_of_name_ordinals;
 };
 
+struct image_export_table_entry
+{
+  uint32_t address;
+  uint32_t forwarder;
+};
+
 struct image_import_descriptor
 {
   union

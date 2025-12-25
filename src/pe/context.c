@@ -1,4 +1,5 @@
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -49,7 +50,14 @@ struct _pe_context
   } section_headers;
   struct
   {
-    struct image_export_directory* table;
+    struct image_export_directory descriptor;
+    struct _export_func_entry
+    {
+      char* func_name;
+      uint16_t ordinal;  /* unbiased */
+      struct image_export_table_entry rva;
+    } *array;
+    size_t nfuncs;
   } exports;
   struct
   {
@@ -152,6 +160,27 @@ find_fileoffs_by_rva (
   if (out != NULL)
     *out = section;
   return section->pointer_to_raw_data + (rva - section->virtual_address);
+}
+
+static uint64_t
+find_directory_fileoffs (pe_context_t pe_context, uint8_t index)
+{
+  auto data_dir = pe_context->nt_header.optional_header.data_directory;
+  auto entry = data_dir[index];
+  struct image_section_header* section;
+  auto file_offset = find_fileoffs_by_rva (
+      pe_context, &section, entry.virtual_address);
+  if (!file_offset)
+  {
+    $trace_debug (
+      "invalid entry descriptor RVA: %" PRIx32,
+      entry.virtual_address);
+    return 0;
+  }
+  $trace_debug (
+    "found directory (%" PRIu8 ") table in: %.8s (file+%" PRIx64 ")",
+    index, section->name, file_offset);
+  return file_offset;
 }
 
 static bool
@@ -284,6 +313,105 @@ invalid_entry:
 }
 
 static bool
+read_export_descriptors (pe_context_t pe_context, FILE* file, uint32_t offset)
+{
+  fseek (file, offset, SEEK_SET);
+  auto exports = &pe_context->exports;
+  if (!$try_read_type (exports->descriptor, file))
+  {
+    $trace_debug ("failed to read export directory from file");
+    return false;
+  }
+  $trace_alloc (
+    "allocating export table for %" PRIu32 " entries",
+    exports->descriptor.number_of_functions);
+  exports->nfuncs = exports->descriptor.number_of_functions;
+  exports->array = calloc (sizeof (*exports->array), exports->nfuncs);
+  if (exports->array == NULL)
+    $abort ("failed to allocate exports array");
+  auto offs_eat = find_fileoffs_by_rva (
+    pe_context, NULL, exports->descriptor.address_of_functions);
+  auto offs_names = find_fileoffs_by_rva (
+    pe_context, NULL, exports->descriptor.address_of_names);
+  auto offs_ordinals = find_fileoffs_by_rva (
+    pe_context, NULL, exports->descriptor.address_of_name_ordinals);
+  if (!offs_eat || !offs_names || !offs_ordinals)
+  {
+    $trace_debug ("failed to find export address table RVAs");
+    goto fail;
+  }
+  for (size_t i = 0; i < exports->descriptor.number_of_functions; ++i)
+  {
+    auto entry = &exports->array[i];
+    fseek (
+      file, offs_eat + i * sizeof (struct image_export_table_entry), SEEK_SET);
+    if (!$try_read_type (entry->rva, file))
+    {
+      $trace_debug ("failed to read export table entry from file");
+      goto fail;
+    }
+    entry->ordinal = i;
+    
+    /* find the export name pointer, if it exists */
+    for (size_t j = 0; j < exports->descriptor.number_of_names; ++j)
+    {
+      fseek (file, offs_ordinals + i * sizeof (uint16_t), SEEK_SET);
+      uint16_t ordinal;
+      if (!$try_read_type (ordinal, file))
+      {
+        $trace_debug ("failed to read export table ordinal");
+        goto fail;
+      }
+      if (ordinal != i)
+        continue;
+      fseek (file, offs_names + j * sizeof (uint32_t), SEEK_SET);
+      uint32_t rva_name;
+      if (!$try_read_type (rva_name, file))
+      {
+        $trace_debug ("failed to read export table entry name pointer");
+        goto fail;
+      }
+      auto offs_name = find_fileoffs_by_rva (pe_context, NULL, rva_name);
+      if (!offs_name)
+      {
+        $trace_debug ("failed to find export table entry name");
+        goto fail;
+      }
+      $trace_alloc (
+        "allocating %d bytes for export function name", MAX_FUNCNAME_LENGTH);
+      entry->func_name = calloc (sizeof (char), MAX_FUNCNAME_LENGTH);
+      if (entry->func_name == NULL)
+        $abort ("failed to allocate export function name");
+      fseek (file, offs_name, SEEK_SET);
+      auto nread = $try_read_asciz (
+        entry->func_name, MAX_FUNCNAME_LENGTH, file);
+      if (!nread)
+      {
+        $trace_debug ("failed to read export function name");
+        free (entry->func_name);
+        goto fail;
+      }
+      $trace_alloc ("downsizing export function name to %d bytes", nread);
+      auto resized = reallocarray (entry->func_name, sizeof (char), nread);
+      if (resized == NULL)
+        $abort ("failed to reallocate export function name");
+      entry->func_name = resized;
+      $trace_debug (
+        "read exported function (+%" PRIx32 ")#%" PRIu16 ": %s",
+        entry->rva.address, entry->ordinal, entry->func_name);
+    }
+    if (entry->func_name == NULL)
+      $trace_debug (
+        "read exported function (+%" PRIx32 ")#%" PRIu16 ": (no-name)",
+        entry->rva.address, entry->ordinal);
+  }
+  return true;
+fail:
+  free (exports->array);
+  return false;
+}
+
+static bool
 read_import_descriptors (pe_context_t pe_context, FILE* file, uint32_t offset)
 {
   for (size_t i = 0;; ++i)
@@ -404,7 +532,6 @@ pe_context$from_file (FILE* file, uint8_t flags)
   /* splicing together the optional header, since there are variations
    * between the 32- and 64-bit versions
    */
-
   auto optional_header = &pe_context->nt_header.optional_header;
   if (!$try_read_sized (
       optional_header, $offset_between_opthdr (
@@ -469,25 +596,28 @@ pe_context$from_file (FILE* file, uint8_t flags)
       section.size_of_raw_data, section.misc.virtual_size);
   }
 
-  auto data_dir = optional_header->data_directory;
   if (flags & PE_CONTEXT_LOAD_IMPORT_DIRECTORY)
   {
-    auto import_entry = data_dir[IMAGE_DIRECTORY_ENTRY_IMPORT];
-    struct image_section_header* section;
-    auto file_offset = find_fileoffs_by_rva (
-        pe_context, &section, import_entry.virtual_address);
-    if (!file_offset)
+    auto import_offset
+      = find_directory_fileoffs (pe_context, IMAGE_DIRECTORY_ENTRY_IMPORT);
+    if (!import_offset)
     {
-      $trace_debug (
-        "invalid import descriptor RVA: %" PRIx32,
-        import_entry.virtual_address);
+      $trace_debug ("failed to find import directory file offset");
       goto fail;
     }
-    $trace_debug (
-      "found import descriptor table in: %.8s (file+%" PRIx64 ")",
-      section->name, file_offset);
-    fseek (file, file_offset, SEEK_SET);
-    if (!read_import_descriptors (pe_context, file, file_offset))
+    if (!read_import_descriptors (pe_context, file, import_offset))
+      goto fail;
+  }
+  if (flags & PE_CONTEXT_LOAD_EXPORT_DIRECTORY)
+  {
+    auto export_offset
+      = find_directory_fileoffs (pe_context, IMAGE_DIRECTORY_ENTRY_EXPORT);
+    if (!export_offset)
+    {
+      $trace_debug ("failed to find export directory file offset");
+      goto fail;
+    }
+    if (!read_export_descriptors (pe_context, file, export_offset))
       goto fail;
   }
 
@@ -503,6 +633,16 @@ fail:
 void
 pe_context$free (pe_context_t pe_context)
 {
+  $trace_alloc ("freeing export entries");
+  for (size_t i = 0; i < pe_context->exports.nfuncs; ++i)
+  {
+    auto entry = pe_context->exports.array[i];
+    $trace_alloc (
+      "\tfreeing export: +%" PRIx32 "#%" PRIu16 " (%s)",
+      entry.rva.address, entry.ordinal, entry.func_name);
+    free (entry.func_name);
+  }
+  free (pe_context->exports.array);
   $trace_alloc ("freeing import entries");
   for (size_t i = 0; i < pe_context->imports.size; ++i)
   {

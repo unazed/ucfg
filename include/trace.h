@@ -18,9 +18,9 @@
     exit (EXIT_FAILURE); \
   }
 
-#define $trace_alloc(...)
-#define $trace_debug(...)
-#define $trace_verbose(...)
+#define $trace_alloc(...)   {}
+#define $trace_debug(...)   {}
+#define $trace_verbose(...) {}
 
 #ifndef NO_TRACE
 # ifndef NO_TRACE_ALLOC
