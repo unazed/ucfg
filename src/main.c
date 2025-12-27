@@ -17,7 +17,8 @@ main (int argc, const char* argv[])
   $trace_debug ("file opened: %s", argv[1]);
 
   auto pe_context = pe_context$from_file (
-    file, PE_CONTEXT_LOAD_IMPORT_DIRECTORY | PE_CONTEXT_LOAD_EXPORT_DIRECTORY);
+    file, PE_CONTEXT_LOAD_IMPORT_DIRECTORY | PE_CONTEXT_LOAD_EXPORT_DIRECTORY
+      | PE_CONTEXT_LOAD_TLS_DIRECTORY);
 
   pe_context$free (pe_context);
   fclose (file);

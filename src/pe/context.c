@@ -10,37 +10,14 @@
 #include "trace.h"
 #include "platform.h"
 
-#define $try_read_sized(into, size, file) \
-  ({ \
-    auto nread = fread ((into), (size), 1, (file)); \
-    if (nread) \
-      $trace_verbose ("read " #size " (%" PRIu64 ") bytes", size); \
-    nread; \
-  })
-#define $try_read_type(into, file) \
-  $try_read_sized (&(into), sizeof (into), file)
-#define $try_read_asciz(into, max_length, file) \
-  ({ \
-    int c, nread; \
-    for (nread = 0; nread < (max_length) - 1; ++nread) \
-    { \
-      if ((c = fgetc (file)) == EOF) \
-      { \
-        nread = 0; \
-        break; \
-      } \
-      into[nread] = c; \
-      if (!c) \
-        break; \
-    } \
-    nread; \
-  })
-
+#define $read_type(into, file) \
+  read_sized (&(into), sizeof (into), file)
 #define $offset_between_opthdr(memb1, memb2) \
   $offset_between (struct image_optional_header, memb1, memb2)
 
 struct _pe_context
 {
+  FILE* stream;
   struct image_dos_header dos_header;
   struct image_nt_headers nt_header;
   struct
@@ -75,6 +52,12 @@ struct _pe_context
     } *array;
     size_t size;
   } imports;
+  struct
+  {
+    struct image_tls_table descriptor;
+    uint64_t* callbacks;
+    size_t ncallbacks;
+  } tls;
 };
 
 static bool
@@ -83,6 +66,80 @@ is_image_x64 (pe_context_t pe_context)
   return (
     pe_context->nt_header.optional_header.magic == IMAGE_NT_OPTIONAL_HDR64_MAGIC
   );
+}
+
+static uint8_t
+get_image_maxsize (pe_context_t pe_context)
+{
+  return is_image_x64 (pe_context)? sizeof (uint64_t): sizeof (uint32_t);
+}
+
+static uint64_t
+get_image_base (pe_context_t pe_context)
+{
+  if (is_image_x64 (pe_context))
+    return pe_context->nt_header.optional_header.bases._64.image_base;
+  return pe_context->nt_header.optional_header.bases._32.image_base;
+}
+
+static uint64_t
+rva_to_va (pe_context_t pe_context, uint64_t address)
+{
+  return address + get_image_base (pe_context);
+}
+
+static uint64_t
+va_to_rva (pe_context_t pe_context, uint64_t address)
+{
+  return address - get_image_base (pe_context);
+}
+
+static int
+read_sized (void* into, size_t size, FILE* file)
+{
+  auto nread = fread (into, size, 1, file);
+  if (nread)
+    $trace_verbose ("read %" PRIu64 " bytes", size);
+  else
+    $trace_debug ("failed to read %" PRIu64 " bytes", size);
+  return nread;
+}
+
+static int
+read_asciz (char* into, ssize_t max_length, FILE* file)
+{
+  int c, nread;
+  for (nread = 0; nread < max_length; ++nread)
+  {
+    if ((c = fgetc (file)) == EOF)
+    {
+      $trace_debug ("failed to read string from file");
+      return 0;
+    }
+    into[nread] = c;
+    if (!c)
+      break;
+  }
+  return nread;
+}
+
+static int
+read_maxint (uint64_t* into, pe_context_t pe_context)
+{
+  if (is_image_x64 (pe_context))
+  {
+    uint64_t n;
+    auto nread = $read_type (n, pe_context->stream);
+    if (nread)
+      *into = n;
+    else
+      $trace_debug ("failed to read 64-bit integer from file");
+    return nread;
+  }
+  auto nread = $read_type (into, pe_context->stream);
+  if (!nread)
+    $trace_debug ("failed to read 32-bit integer from file");
+  return nread;
 }
 
 static bool
@@ -185,9 +242,9 @@ find_directory_fileoffs (pe_context_t pe_context, uint8_t index)
 
 static bool
 resolve_imports (
-  pe_context_t pe_context, FILE* file, struct _import_entry* ientry)
+  pe_context_t pe_context, struct _import_entry* ientry)
 {
-  $trace_alloc ("loading library handle: %s", ientry->module_name);
+  auto file = pe_context->stream;
   auto module = platform_load_library (ientry->module_name);
   if (module == NULL)
   {
@@ -204,25 +261,13 @@ resolve_imports (
     return false;
   }
 
-  uint64_t size, rshift, msb_mask;
-  if (is_image_x64 (pe_context))
-  {
-    size = sizeof (uint64_t);
-    rshift = 0;
-    msb_mask = 1ull << 63;
-  }
-  else
-  {
-    size = sizeof (uint32_t);
-    rshift = 32;
-    msb_mask = 1ull << 31;
-  }
-
+  auto ilt_increment = get_image_maxsize (pe_context);
   for (size_t i = 0;; ++i)
   {
-    fseek (file, ilt_offset + i * size, SEEK_SET);
-    uint64_t ilt_entry = 0;
-    if (!$try_read_sized (&ilt_entry, size, file))
+    fseek (file, ilt_offset + i * ilt_increment, SEEK_SET);
+    uint64_t ilt_entry;
+    auto nread = read_maxint (&ilt_entry, pe_context); 
+    if (!nread)
     {
       $trace_debug (
         "failed to read ILT entry for module: '%s'", ientry->module_name);
@@ -230,17 +275,10 @@ resolve_imports (
     }
     if (!ilt_entry)
       break;
-    ilt_entry >>= rshift;
-    $trace_alloc (
-      "(re-)allocating function entry table for %zu entries",
-      ientry->nfuncs + 1);
-    auto funcs = reallocarray (
+    ientry->funcs = $chk_reallocarray (
       ientry->funcs, sizeof (struct _import_func_entry), ++ientry->nfuncs);
-    if (funcs == NULL)
-      $abort ("failed to allocate import function array");
-    ientry->funcs = funcs;
     auto fentry = &ientry->funcs[ientry->nfuncs - 1];
-    if (ilt_entry & msb_mask)
+    if (ilt_entry & (1ull << (8 * ilt_increment - 1)))
     {
       /* TODO: import by ordinal */
       $trace_debug (
@@ -259,29 +297,20 @@ resolve_imports (
       }
       struct image_import_by_name hint_name;
       fseek (file, hint_offset, SEEK_SET);
-      if (!$try_read_type (hint_name, file))
+      if (!$read_type (hint_name, file))
       {
         $trace_debug ("failed to read hint/name offset for ILT");
         goto invalid_entry;
       }
-      $trace_alloc (
-        "allocating buffer for function name (%d bytes)", MAX_FUNCNAME_LENGTH);
-      char* func_name = calloc (sizeof (char), MAX_FUNCNAME_LENGTH);
-      if (func_name == NULL)
-        $abort ("failed to allocate function name buffer");
-      auto nread = $try_read_asciz (func_name, MAX_FUNCNAME_LENGTH, file);
+      char* func_name = $chk_calloc (sizeof (char), MAX_FUNCNAME_LENGTH);
+      auto nread = read_asciz (func_name, MAX_FUNCNAME_LENGTH, file);
       if (!nread)
       {
         $trace_debug ("failed to read function name from hint/name");
-        free (func_name);
+        $chk_free (func_name);
         goto invalid_entry;
       }
-      $trace_alloc (
-        "downsizing buffer for function name to %d bytes", nread + 1);
-      void* resized = realloc (func_name, nread + 1);
-      if (resized == NULL)
-        $abort ("failed to resize function name");
-      func_name = resized;
+      func_name = $chk_realloc (func_name, nread + 1);
       $trace_debug (
         "importing (%s): %s#%" PRIx16,
         ientry->module_name, func_name, hint_name.hint);
@@ -301,34 +330,25 @@ resolve_imports (
     continue;
 
 invalid_entry:
-    $trace_alloc (
-      "downsizing function entry table to %zu entries", ientry->nfuncs - 1);
-    funcs = reallocarray (
+    ientry->funcs = $chk_reallocarray (
       ientry->funcs, sizeof (struct _import_func_entry), --ientry->nfuncs);
-    if (funcs == NULL)
-      $abort ("failed to reallocate import function array");
-    ientry->funcs = funcs;
   }
   return true;
 }
 
 static bool
-read_export_descriptors (pe_context_t pe_context, FILE* file, uint32_t offset)
+read_export_descriptors (pe_context_t pe_context, uint32_t offset)
 {
+  auto file = pe_context->stream;
   fseek (file, offset, SEEK_SET);
   auto exports = &pe_context->exports;
-  if (!$try_read_type (exports->descriptor, file))
+  if (!$read_type (exports->descriptor, file))
   {
     $trace_debug ("failed to read export directory from file");
     return false;
   }
-  $trace_alloc (
-    "allocating export table for %" PRIu32 " entries",
-    exports->descriptor.number_of_functions);
   exports->nfuncs = exports->descriptor.number_of_functions;
-  exports->array = calloc (sizeof (*exports->array), exports->nfuncs);
-  if (exports->array == NULL)
-    $abort ("failed to allocate exports array");
+  exports->array = $chk_calloc (sizeof (*exports->array), exports->nfuncs);
   auto offs_eat = find_fileoffs_by_rva (
     pe_context, NULL, exports->descriptor.address_of_functions);
   auto offs_names = find_fileoffs_by_rva (
@@ -345,7 +365,7 @@ read_export_descriptors (pe_context_t pe_context, FILE* file, uint32_t offset)
     auto entry = &exports->array[i];
     fseek (
       file, offs_eat + i * sizeof (struct image_export_table_entry), SEEK_SET);
-    if (!$try_read_type (entry->rva, file))
+    if (!$read_type (entry->rva, file))
     {
       $trace_debug ("failed to read export table entry from file");
       goto fail;
@@ -357,7 +377,7 @@ read_export_descriptors (pe_context_t pe_context, FILE* file, uint32_t offset)
     {
       fseek (file, offs_ordinals + i * sizeof (uint16_t), SEEK_SET);
       uint16_t ordinal;
-      if (!$try_read_type (ordinal, file))
+      if (!$read_type (ordinal, file))
       {
         $trace_debug ("failed to read export table ordinal");
         goto fail;
@@ -366,7 +386,7 @@ read_export_descriptors (pe_context_t pe_context, FILE* file, uint32_t offset)
         continue;
       fseek (file, offs_names + j * sizeof (uint32_t), SEEK_SET);
       uint32_t rva_name;
-      if (!$try_read_type (rva_name, file))
+      if (!$read_type (rva_name, file))
       {
         $trace_debug ("failed to read export table entry name pointer");
         goto fail;
@@ -377,25 +397,18 @@ read_export_descriptors (pe_context_t pe_context, FILE* file, uint32_t offset)
         $trace_debug ("failed to find export table entry name");
         goto fail;
       }
-      $trace_alloc (
-        "allocating %d bytes for export function name", MAX_FUNCNAME_LENGTH);
-      entry->func_name = calloc (sizeof (char), MAX_FUNCNAME_LENGTH);
-      if (entry->func_name == NULL)
-        $abort ("failed to allocate export function name");
+      entry->func_name = $chk_calloc (sizeof (char), MAX_FUNCNAME_LENGTH);
       fseek (file, offs_name, SEEK_SET);
-      auto nread = $try_read_asciz (
+      auto nread = read_asciz (
         entry->func_name, MAX_FUNCNAME_LENGTH, file);
       if (!nread)
       {
         $trace_debug ("failed to read export function name");
-        free (entry->func_name);
+        $chk_free (entry->func_name);
         goto fail;
       }
-      $trace_alloc ("downsizing export function name to %d bytes", nread);
-      auto resized = reallocarray (entry->func_name, sizeof (char), nread);
-      if (resized == NULL)
-        $abort ("failed to reallocate export function name");
-      entry->func_name = resized;
+      entry->func_name = $chk_reallocarray (
+        entry->func_name, sizeof (char), nread);
       $trace_debug (
         "read exported function (+%" PRIx32 ")#%" PRIu16 ": %s",
         entry->rva.address, entry->ordinal, entry->func_name);
@@ -406,31 +419,75 @@ read_export_descriptors (pe_context_t pe_context, FILE* file, uint32_t offset)
         entry->rva.address, entry->ordinal);
   }
   return true;
+
 fail:
-  free (exports->array);
+  $chk_free (exports->array);
   return false;
 }
 
 static bool
-read_import_descriptors (pe_context_t pe_context, FILE* file, uint32_t offset)
+read_tls_directory (pe_context_t pe_context, uint32_t offset)
 {
+  auto file = pe_context->stream;
+  auto tls = &pe_context->tls;
+  fseek (file, offset, SEEK_SET);
+  if (!read_maxint (&tls->descriptor.raw_data_start, pe_context)
+      || !read_maxint (&tls->descriptor.raw_data_end, pe_context)
+      || !read_maxint (&tls->descriptor.index_address, pe_context)
+      || !read_maxint (&tls->descriptor.callback_address, pe_context)
+      || !$read_type (tls->descriptor.size_of_zero_fill, file)
+      || !$read_type (tls->descriptor.characteristics, file))
+  {
+    $trace_debug ("failed to read TLS descriptor from file");
+    return false;
+  }
+  auto callback_offset = find_fileoffs_by_rva (
+    pe_context, NULL, va_to_rva (pe_context, tls->descriptor.callback_address));
+  if (!callback_offset)
+  {
+    $trace_debug ("failed to find TLS callback address table offset");
+    return false;
+  }
+
+  fseek (file, callback_offset, SEEK_SET);
+  for (;;)
+  {
+    uint64_t callback_address;
+    if (!$read_type (callback_address, file))
+    {
+      $trace_debug ("failed to read TLS callback address");
+      goto fail;
+    }
+    if (!callback_address)
+      break;
+    $trace_debug ("found TLS callback: %" PRIx64, callback_address);
+    tls->callbacks = $chk_reallocarray (
+      tls->callbacks, sizeof (uint64_t), ++tls->ncallbacks);
+  }
+  return true;
+
+fail:
+  $chk_free (tls->callbacks);
+  tls->callbacks = NULL;
+  tls->ncallbacks = 0;
+  return false;
+}
+
+static bool
+read_import_descriptors (pe_context_t pe_context, uint32_t offset)
+{
+  auto file = pe_context->stream;
   for (size_t i = 0;; ++i)
   {
     fseek (
       file, offset + i * sizeof (struct image_import_descriptor), SEEK_SET);
-    $trace_alloc (
-      "(re-)allocating import array for %zu entries",
-      pe_context->imports.size + 1);
-    struct _import_entry* entries = reallocarray (
+    pe_context->imports.array = $chk_reallocarray (
         pe_context->imports.array, sizeof (struct _import_entry),
         ++pe_context->imports.size);
-    if (entries == NULL)
-      $abort ("failed to reallocate IDT entries tables");
-    pe_context->imports.array = entries;
-    auto ientry = &entries[pe_context->imports.size - 1];
+    auto ientry = &pe_context->imports.array[pe_context->imports.size - 1];
     /* NB: `reallocarray` doesn't zero memory like `calloc` :( */
     memset (ientry, 0, sizeof (*ientry));
-    if (!$try_read_type (ientry->descriptor, file))
+    if (!$read_type (ientry->descriptor, file))
     {
       $trace_debug ("failed to read import descriptor");
       return false;
@@ -438,17 +495,9 @@ read_import_descriptors (pe_context_t pe_context, FILE* file, uint32_t offset)
     if (!ientry->descriptor.characteristics)
     {  /* sentinel descriptor */
       if (pe_context->imports.size)
-      {
-        $trace_alloc (
-          "downsizing import array to %zu entries",
-          pe_context->imports.size - 1);
-        void* resized = reallocarray (
+        pe_context->imports.array = $chk_reallocarray (
           pe_context->imports.array, sizeof (struct _import_entry),
           --pe_context->imports.size);
-        if (resized == NULL)
-          $abort ("failed to resize import array");
-        pe_context->imports.array = resized;
-      }
       break;
     }
     auto name_offset = find_fileoffs_by_rva (
@@ -458,38 +507,24 @@ read_import_descriptors (pe_context_t pe_context, FILE* file, uint32_t offset)
       $trace_debug ("failed to find IDT name");
       continue; 
     }
-    $trace_alloc ("allocating module name (%d bytes)", MAX_PATH);
-    ientry->module_name = calloc (sizeof (char), MAX_PATH);
-    if (ientry->module_name == NULL)
-      $abort ("failed to allocate IDT module name");
+    ientry->module_name = $chk_calloc (sizeof (char), MAX_PATH);
     fseek (file, name_offset, SEEK_SET);
-    auto nread = $try_read_asciz (ientry->module_name, MAX_PATH, file);
+    auto nread = read_asciz (ientry->module_name, MAX_PATH, file);
     if (!nread)
     {
       $trace_debug ("failed to read IDT name");
-      free (ientry->module_name);
+      $chk_free (ientry->module_name);
       continue;
     }
-    $trace_alloc ("downsizing module name to %d bytes", nread);
-    void* resized = realloc (ientry->module_name, nread);
-    if (resized == NULL)
-      $abort ("failed to resize module name");
-    ientry->module_name = resized;
-    pe_context->imports.array = entries;
-    if (!resolve_imports (pe_context, file, ientry))
+    ientry->module_name = $chk_realloc (ientry->module_name, nread);
+    if (!resolve_imports (pe_context, ientry))
     {
       $trace_debug (
         "failed to resolve imports for module: %s", ientry->module_name);
-      $trace_alloc (
-        "downsizing import array to %zu entries, and freeing module name",
-        pe_context->imports.size - 1);
-      free (ientry->module_name);
-      resized = reallocarray (
+      $chk_free (ientry->module_name);
+      pe_context->imports.array = $chk_reallocarray (
         pe_context->imports.array, sizeof (struct _import_entry),
         --pe_context->imports.size);
-      if (resized == NULL)
-        $abort ("failed to resize import table");
-      pe_context->imports.array = resized;
       continue;
     }
   }
@@ -499,13 +534,7 @@ read_import_descriptors (pe_context_t pe_context, FILE* file, uint32_t offset)
 static pe_context_t
 pe_context$alloc (void)
 {
-  auto pe_context = calloc (1, $ptrsize (pe_context_t));
-  if (pe_context == NULL)
-    $abort ("failed to allocate context");
-  $trace_alloc (
-    "allocated PE context: %p, size: %" PRIu64 " bytes", pe_context,
-    $ptrsize (pe_context_t));
-  return pe_context;
+  return $chk_calloc ($ptrsize (pe_context_t), 1);
 }
 
 pe_context_t
@@ -513,9 +542,10 @@ pe_context$from_file (FILE* file, uint8_t flags)
 {
   $trace_debug ("allocating PE context from file");
   auto pe_context = pe_context$alloc ();
+  pe_context->stream = file;
   
-  if (!$try_read_type (pe_context->dos_header, file))
-    goto read_fail;
+  if (!$read_type (pe_context->dos_header, file))
+    goto fail;
   if (!validate_dos_header (pe_context))
   {
     $trace_debug ("invalid file DOS header");
@@ -524,35 +554,24 @@ pe_context$from_file (FILE* file, uint8_t flags)
 
   fseek (file, pe_context->dos_header.e_lfanew, SEEK_SET);
 
-  if (!$try_read_type (pe_context->nt_header.signature, file))
-    goto read_fail;
-  if (!$try_read_type (pe_context->nt_header.file_header, file))
-    goto read_fail;
+  if (!$read_type (pe_context->nt_header.signature, file))
+    goto fail;
+  if (!$read_type (pe_context->nt_header.file_header, file))
+    goto fail;
 
   /* splicing together the optional header, since there are variations
    * between the 32- and 64-bit versions
    */
   auto optional_header = &pe_context->nt_header.optional_header;
-  if (!$try_read_sized (
+  if (!read_sized (
       optional_header, $offset_between_opthdr (
         _$start, size_of_stack_reserve), file))
-    goto read_fail;
+    goto fail;
 
   switch (optional_header->magic)
   {
     case IMAGE_NT_OPTIONAL_HDR32_MAGIC:
-      if (!$try_read_type (optional_header->size_of_stack_reserve.lo, file)
-          || !$try_read_type (optional_header->size_of_stack_commit.lo, file)
-          || !$try_read_type (optional_header->size_of_heap_reserve.lo, file)
-          || !$try_read_type (optional_header->size_of_heap_commit.lo, file))
-        goto read_fail;
-      break;
     case IMAGE_NT_OPTIONAL_HDR64_MAGIC:
-      if (!$try_read_type (optional_header->size_of_stack_reserve.u64, file)
-          || !$try_read_type (optional_header->size_of_stack_commit.u64, file)
-          || !$try_read_type (optional_header->size_of_heap_reserve.u64, file)
-          || !$try_read_type (optional_header->size_of_heap_commit.u64, file))
-        goto read_fail;
       break;
     default:
       $trace_debug (
@@ -560,11 +579,16 @@ pe_context$from_file (FILE* file, uint8_t flags)
         optional_header->magic);
       goto fail;
   }
+  if (!read_maxint (&optional_header->size_of_stack_reserve, pe_context)
+      || !read_maxint (&optional_header->size_of_stack_commit, pe_context)
+      || !read_maxint (&optional_header->size_of_heap_reserve, pe_context)
+      || !read_maxint (&optional_header->size_of_heap_commit, pe_context))
+    goto fail;
 
-  if (!$try_read_sized (
+  if (!read_sized (
       &optional_header->loader_flags, $offset_between_opthdr (
         loader_flags, _$end), file))
-    goto read_fail;
+    goto fail;
 
   if (!validate_nt_headers (pe_context))
   {
@@ -574,17 +598,12 @@ pe_context$from_file (FILE* file, uint8_t flags)
 
   auto nr_sections = pe_context->nt_header.file_header.number_of_sections;
   auto array_size = nr_sections * sizeof (struct image_section_header);
-  $trace_alloc (
-    "allocating %" PRIu16 " PE section headers (%zu bytes)",
-    nr_sections, array_size);
   auto section_headers = pe_context->section_headers.array
-    = calloc (array_size, 1);
-  if (section_headers == NULL)
-    $abort ("failed to allocate PE section headers");
+    = $chk_calloc (array_size, 1);
   pe_context->section_headers.size = nr_sections;
 
-  if (!$try_read_sized (section_headers, array_size, file))
-    goto read_fail;
+  if (!read_sized (section_headers, array_size, file))
+    goto fail;
 
   for (size_t i = 0; i < nr_sections; ++i)
   {
@@ -598,33 +617,45 @@ pe_context$from_file (FILE* file, uint8_t flags)
 
   if (flags & PE_CONTEXT_LOAD_IMPORT_DIRECTORY)
   {
-    auto import_offset
-      = find_directory_fileoffs (pe_context, IMAGE_DIRECTORY_ENTRY_IMPORT);
+    auto import_offset = find_directory_fileoffs (
+      pe_context, IMAGE_DIRECTORY_ENTRY_IMPORT);
     if (!import_offset)
     {
       $trace_debug ("failed to find import directory file offset");
       goto fail;
     }
-    if (!read_import_descriptors (pe_context, file, import_offset))
+    if (!read_import_descriptors (pe_context, import_offset))
       goto fail;
   }
+
   if (flags & PE_CONTEXT_LOAD_EXPORT_DIRECTORY)
   {
-    auto export_offset
-      = find_directory_fileoffs (pe_context, IMAGE_DIRECTORY_ENTRY_EXPORT);
+    auto export_offset = find_directory_fileoffs (
+      pe_context, IMAGE_DIRECTORY_ENTRY_EXPORT);
     if (!export_offset)
     {
       $trace_debug ("failed to find export directory file offset");
       goto fail;
     }
-    if (!read_export_descriptors (pe_context, file, export_offset))
+    if (!read_export_descriptors (pe_context, export_offset))
+      goto fail;
+  }
+
+  if (flags & PE_CONTEXT_LOAD_TLS_DIRECTORY)
+  {
+    auto tls_offset = find_directory_fileoffs (
+      pe_context, IMAGE_DIRECTORY_ENTRY_TLS);
+    if (!tls_offset)
+    {
+      $trace_debug ("failed to find TLS directory file offset");
+      goto fail;
+    }
+    if (!read_tls_directory (pe_context, tls_offset))
       goto fail;
   }
 
   return pe_context;
 
-read_fail:
-  $trace_debug ("failed to read bytes from file");
 fail:
   pe_context$free (pe_context);
   return NULL;
@@ -633,35 +664,27 @@ fail:
 void
 pe_context$free (pe_context_t pe_context)
 {
-  $trace_alloc ("freeing export entries");
+  $trace_debug ("freeing PE context");
+  $chk_free (pe_context->tls.callbacks);
   for (size_t i = 0; i < pe_context->exports.nfuncs; ++i)
   {
     auto entry = pe_context->exports.array[i];
-    $trace_alloc (
-      "\tfreeing export: +%" PRIx32 "#%" PRIu16 " (%s)",
-      entry.rva.address, entry.ordinal, entry.func_name);
-    free (entry.func_name);
+    $chk_free (entry.func_name);
   }
-  free (pe_context->exports.array);
-  $trace_alloc ("freeing import entries");
+  $chk_free (pe_context->exports.array);
   for (size_t i = 0; i < pe_context->imports.size; ++i)
   {
     auto ientry = pe_context->imports.array[i];
-    $trace_alloc (
-      "freeing function entry table for module: %s", ientry.module_name);
     for (size_t j = 0; j < ientry.nfuncs; ++j)
     {
       auto func = ientry.funcs[j];
-      $trace_alloc ("\tfreeing function name: %s", func.name);
-      free (func.name);
+      $chk_free (func.name);
     }
     platform_free_library (ientry.module_base);
-    free (ientry.funcs);
-    free (ientry.module_name);
+    $chk_free (ientry.funcs);
+    $chk_free (ientry.module_name);
   }
-  free (pe_context->imports.array);
-  $trace_alloc ("freeing section headers");
-  free (pe_context->section_headers.array);
-  $trace_alloc ("freeing PE context");
-  free (pe_context);
+  $chk_free (pe_context->imports.array);
+  $chk_free (pe_context->section_headers.array);
+  $chk_free (pe_context);
 }

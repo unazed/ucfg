@@ -8,6 +8,7 @@
 
 #define PE_CONTEXT_LOAD_IMPORT_DIRECTORY (1ull << 0)
 #define PE_CONTEXT_LOAD_EXPORT_DIRECTORY (1ull << 1)
+#define PE_CONTEXT_LOAD_TLS_DIRECTORY    (1ull << 2)
 
 typedef struct _pe_context* pe_context_t;
 

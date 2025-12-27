@@ -107,42 +107,10 @@ struct image_optional_header
   uint32_t check_sum;
   uint16_t subsystem;
   uint16_t dll_characteristics;
-  union
-  {
-    uint64_t u64;
-    struct
-    {
-      uint32_t hi;
-      uint32_t lo;
-    };
-  } size_of_stack_reserve;
-  union
-  {
-    uint64_t u64;
-    struct
-    {
-      uint32_t hi;
-      uint32_t lo;
-    };
-  } size_of_stack_commit;
-  union
-  {
-    uint64_t u64;
-    struct
-    {
-      uint32_t hi;
-      uint32_t lo;
-    };
-  } size_of_heap_reserve;
-  union
-  {
-    uint64_t u64;
-    struct
-    {
-      uint32_t hi;
-      uint32_t lo;
-    };
-  } size_of_heap_commit;
+  uint64_t size_of_stack_reserve;
+  uint64_t size_of_stack_commit;
+  uint64_t size_of_heap_reserve;
+  uint64_t size_of_heap_commit;
   uint32_t loader_flags;
   uint32_t number_of_rva_and_sizes;
   struct image_data_directory data_directory[IMAGE_NUMBEROF_DIRECTORY_ENTRIES];
@@ -212,6 +180,16 @@ struct image_import_by_name
 {
   uint16_t hint;
   char name[0];
+};
+
+struct image_tls_table
+{
+  uint64_t raw_data_start;
+  uint64_t raw_data_end;
+  uint64_t index_address;
+  uint64_t callback_address;
+  uint32_t size_of_zero_fill;
+  uint32_t characteristics;
 };
 
 #pragma pack(pop)
