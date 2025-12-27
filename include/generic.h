@@ -6,6 +6,11 @@
 #define $ptrsize(ty) (sizeof (*(ty)(0)))
 #define $offset_between(ty, memb1, memb2) \
   offsetof (ty, memb2) - offsetof (ty, memb1)
+#define $read_type(into, file) \
+  read_sized (&(into), sizeof (into), file)
 
 #define __builtin_unimplemented() $abort ("unimplemented")
 #define auto __auto_type
+
+int read_sized (void* into, size_t size, FILE* file);
+int read_asciz (char* into, ssize_t max_length, FILE* file);

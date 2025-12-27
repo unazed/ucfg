@@ -1,5 +1,4 @@
 #include "platform.h"
-#include "libloaderapi.h"
 
 #if defined(_WIN32) || defined(__MINGW32__) || defined(__MINGW64__) \
   || defined(__CYGWIN__)
