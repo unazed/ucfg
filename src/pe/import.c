@@ -1,5 +1,6 @@
 #include <string.h>
 
+#include "array.h"
 #include "pe/context.h"
 #include "platform.h"
 

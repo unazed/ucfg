@@ -1,27 +1,39 @@
+#include <stdbool.h>
 #include <string.h>
 
 #include "array.h"
 #include "trace.h"
 
 #define MEMBER_ALIGNMENT      (8)
-#define INITIAL_BYTE_CAPACITY (1024)
-_Static_assert (
-  INITIAL_BYTE_CAPACITY > 0, "Initial array allocation size must be positive");
-#define ALLOC_NMEMB_INCREMENT (4)
-_Static_assert (
-  ALLOC_NMEMB_INCREMENT > 0, "Array reallocation increment must be positive");
+#define INITIAL_BYTE_CAPACITY (256)
+
+static const struct array_allocopts g_default_allocopts = {
+  .alloc_nmemb_increment  = 4,
+  .trim_nmemb_threshold   = 8,
+  .min_nmemb              = 0,
+  .max_nmemb              = 0
+};
 
 struct _array
 {
   uint8_t* raw;
   size_t capacity;
-  size_t nmemb, membsize, membsize_unaligned;
+  size_t nmemb;
+  size_t membsize, membsize_unaligned;
+  struct array_allocopts allocopts;
 };
 
 static size_t
 round_up_to (size_t mult, size_t n)
 {
   return (n + mult - 1) & ~(mult - 1);
+}
+
+static bool
+is_tuple (array_t array)
+{
+  auto opts = array->allocopts;
+  return opts.min_nmemb && (opts.min_nmemb == opts.max_nmemb);
 }
 
 static size_t
@@ -56,13 +68,26 @@ get_array_head (array_t array)
 static void*
 maybe_extend_array (array_t array)
 {
+  auto allocopts = array->allocopts;
   if (!has_space_for_new (array))
   {
-    auto new_capacity = ALLOC_NMEMB_INCREMENT * array->membsize;
+    if (array->allocopts.max_nmemb
+        && (array->nmemb == array->allocopts.max_nmemb))
+      $abort ("tried to insert data into fixed-size array");
+    if (is_tuple (array))
+      $abort ("tried to insert data into full tuple");
+    size_t new_capacity;
+    if (allocopts.max_nmemb)
+      new_capacity = array->membsize * $min (
+        array->nmemb + allocopts.alloc_nmemb_increment,
+        allocopts.max_nmemb);
+    else
+      new_capacity
+        = array->membsize * (array->nmemb + allocopts.alloc_nmemb_increment);
     $trace_debug (
       "extending array capacity from %zu bytes to %zu",
-      array->capacity, array->capacity + new_capacity);
-    array->capacity += new_capacity;
+      array->capacity, new_capacity);
+    array->capacity = new_capacity;
     array->raw = $chk_realloc (array->raw, array->capacity);
   }
   return get_array_head (array);
@@ -71,8 +96,11 @@ maybe_extend_array (array_t array)
 static void
 maybe_downsize_array (array_t array)
 {
+  auto allocopts = array->allocopts;
+  if (!allocopts.trim_nmemb_threshold || is_tuple (array))
+    return;
   auto free_nmemb = get_free_capacity (array) / array->membsize;
-  size_t nmemb_threshold = 2 * ALLOC_NMEMB_INCREMENT;
+  size_t nmemb_threshold = allocopts.trim_nmemb_threshold;
   if (free_nmemb >= nmemb_threshold)
   {
     auto new_capacity = array->capacity - nmemb_threshold * array->membsize;
@@ -105,6 +133,7 @@ array$new (size_t membsize)
   $trace_debug (
     "creating new array with member size: %zu byte(s) (@%p)",
     membsize, array);
+  array->allocopts = g_default_allocopts;
   array->capacity = INITIAL_BYTE_CAPACITY;
   array->raw = $chk_allocb (array->capacity);
   array->membsize = round_up_to (MEMBER_ALIGNMENT, membsize);
@@ -123,7 +152,7 @@ array$free (array_t array)
 void**
 array$append (array_t array, void* ptrmemb)
 {
-  $trace_debug ("appending member to array: %p", ptrmemb);
+  $trace_debug ("appending member to array: %p", array);
   auto newmemb = memcpy (
     maybe_extend_array (array), ptrmemb, array->membsize_unaligned);
   array->nmemb++;
@@ -186,4 +215,35 @@ size_t
 array$length (array_t array)
 {
   return array->nmemb;
+}
+
+void
+array$allocopts (array_t array, struct array_allocopts opts)
+{
+  if (opts.max_nmemb && (opts.min_nmemb > opts.max_nmemb))
+    $abort ("min. allocated members must be equal to or less than maximum");
+  array->allocopts.min_nmemb = opts.min_nmemb;
+  if (array->nmemb > opts.max_nmemb)
+    $abort ("array size exceeds configured maximum");
+  array->allocopts.max_nmemb = opts.max_nmemb;
+  if ((opts.min_nmemb != opts.max_nmemb) && !opts.alloc_nmemb_increment)
+    $abort ("reallocation increment must be positive");
+  if (opts.max_nmemb && (opts.trim_nmemb_threshold > opts.max_nmemb))
+    $abort ("trim threshold is too large within the capacity constraints");
+  array->allocopts.alloc_nmemb_increment = opts.alloc_nmemb_increment;
+  $trace_debug (
+    "configuring allocation options for array (%p): "
+    "min_nmemb=%zu, max_nmemb=%zu, alloc. increment=%zu, trim threshold=%zu",
+    array, opts.min_nmemb, opts.max_nmemb, opts.alloc_nmemb_increment,
+    opts.trim_nmemb_threshold);
+  auto min_capacity = opts.min_nmemb * array->membsize;
+  if (array->capacity < min_capacity)
+  {
+    $trace_debug (
+      "growing array (%p) to meet min. capacity constraint "
+      "(from %zu to %zu bytes)",
+      array, array->capacity, min_capacity);
+    array->raw = $chk_realloc (array->raw, min_capacity);
+    array->capacity = min_capacity;
+  }
 }

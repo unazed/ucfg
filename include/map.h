@@ -1,0 +1,17 @@
+#pragma once
+
+#include "generic.h"
+
+typedef struct _map *map_t;
+typedef uint64_t hashnum_t;
+
+void map$free (map_t);
+
+__attribute__ (( malloc(map$free, 1) ))
+map_t map$new (void);
+
+void map$set (map_t, hashnum_t key, void* value);
+void* map$get (map_t, hashnum_t key);
+void map$remove (map_t, hashnum_t key);
+bool map$contains (map_t, hashnum_t key);
+bool map$is_empty (map_t);

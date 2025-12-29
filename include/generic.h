@@ -9,6 +9,19 @@
 #define $read_type(into, file) \
   read_sized (&(into), sizeof (into), file)
 
+#define $max(a, b) \
+  ({ \
+    auto _a = (a); \
+    auto _b = (b); \
+    _a > _b ? _a : _b; \
+  })
+#define $min(a, b) \
+  ({ \
+    auto _a = (a); \
+    auto _b = (b); \
+    _a < _b ? _a : _b; \
+  })
+
 #define __builtin_unimplemented() $abort ("unimplemented")
 #define auto __auto_type
 
