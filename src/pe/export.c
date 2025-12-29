@@ -1,18 +1,23 @@
 #include "pe/context.h"
 
+
+
 bool
 pe$read_export_descriptors (pe_context_t pe_context, uint32_t offset)
 {
   auto file = pe_context->stream;
   fseek (file, offset, SEEK_SET);
+
   auto exports = &pe_context->exports;
+  exports->functions = array$new (
+    sizeof (struct export_func_entry));
+
   if (!$read_type (exports->descriptor, file))
   {
     $trace_debug ("failed to read export directory from file");
     return false;
   }
-  exports->nfuncs = exports->descriptor.number_of_functions;
-  exports->array = $chk_calloc (sizeof (*exports->array), exports->nfuncs);
+
   auto offs_eat = pe$find_fileoffs_by_rva (
     pe_context, NULL, exports->descriptor.address_of_functions);
   auto offs_names = pe$find_fileoffs_by_rva (
@@ -24,17 +29,18 @@ pe$read_export_descriptors (pe_context_t pe_context, uint32_t offset)
     $trace_debug ("failed to find export address table RVAs");
     goto fail;
   }
+
   for (size_t i = 0; i < exports->descriptor.number_of_functions; ++i)
   {
-    auto entry = &exports->array[i];
+    struct export_func_entry entry;
     fseek (
       file, offs_eat + i * sizeof (struct image_export_table_entry), SEEK_SET);
-    if (!$read_type (entry->rva, file))
+    if (!$read_type (entry.rva, file))
     {
       $trace_debug ("failed to read export table entry from file");
       goto fail;
     }
-    entry->ordinal = i;
+    entry.ordinal = i;
     
     /* find the export name pointer, if it exists */
     for (size_t j = 0; j < exports->descriptor.number_of_names; ++j)
@@ -61,32 +67,32 @@ pe$read_export_descriptors (pe_context_t pe_context, uint32_t offset)
         $trace_debug ("failed to find export table entry name");
         goto fail;
       }
-      entry->func_name = $chk_calloc (sizeof (char), MAX_FUNCNAME_LENGTH);
+      entry.func_name = $chk_calloc (sizeof (char), MAX_FUNCNAME_LENGTH);
       fseek (file, offs_name, SEEK_SET);
       auto nread = read_asciz (
-        entry->func_name, MAX_FUNCNAME_LENGTH, file);
+        entry.func_name, MAX_FUNCNAME_LENGTH, file);
       if (!nread)
       {
         $trace_debug ("failed to read export function name");
-        $chk_free (entry->func_name);
+        $chk_free (entry.func_name);
         goto fail;
       }
-      entry->func_name = $chk_reallocarray (
-        entry->func_name, sizeof (char), nread);
+      entry.func_name = $chk_reallocarray (
+        entry.func_name, sizeof (char), nread);
       $trace_debug (
         "read exported function (+%" PRIx32 ")#%" PRIu16 ": %s",
-        entry->rva.address, entry->ordinal, entry->func_name);
+        entry.rva.address, entry.ordinal, entry.func_name);
     }
-    if (entry->func_name == NULL)
+    if (entry.func_name == NULL)
       $trace_debug (
         "read exported function (+%" PRIx32 ")#%" PRIu16 ": (no-name)",
-        entry->rva.address, entry->ordinal);
+        entry.rva.address, entry.ordinal);
+    array$append (exports->functions, &entry);
   }
   return true;
 
 fail:
-  $chk_free (exports->array);
-  exports->array = NULL;
-  exports->nfuncs = 0;
+  array$free (exports->functions);
+  exports->functions = NULL;
   return false;
 }

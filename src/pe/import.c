@@ -5,9 +5,10 @@
 
 static bool
 resolve_imports (
-  pe_context_t pe_context, struct _import_entry* ientry)
+  pe_context_t pe_context, struct import_entry* ientry)
 {
   auto file = pe_context->stream;
+  ientry->functions = array$new (sizeof (struct import_func_entry));
   auto module = platform_load_library (ientry->module_name);
   if (module == NULL)
   {
@@ -28,6 +29,8 @@ resolve_imports (
   for (size_t i = 0;; ++i)
   {
     fseek (file, ilt_offset + i * ilt_increment, SEEK_SET);
+    struct import_func_entry fentry = { 0 };
+
     uint64_t ilt_entry;
     auto nread = pe$read_maxint (&ilt_entry, pe_context); 
     if (!nread)
@@ -38,9 +41,6 @@ resolve_imports (
     }
     if (!ilt_entry)
       break;
-    ientry->funcs = $chk_reallocarray (
-      ientry->funcs, sizeof (struct _import_func_entry), ++ientry->nfuncs);
-    auto fentry = &ientry->funcs[ientry->nfuncs - 1];
     if (ilt_entry & (1ull << (8 * ilt_increment - 1)))
     {
       /* TODO: import by ordinal */
@@ -56,14 +56,14 @@ resolve_imports (
       if (!hint_offset)
       {
         $trace_debug ("failed to find hint/name offset for ILT");
-        goto invalid_entry;
+        continue;
       }
       struct image_import_by_name hint_name;
       fseek (file, hint_offset, SEEK_SET);
       if (!$read_type (hint_name, file))
       {
         $trace_debug ("failed to read hint/name offset for ILT");
-        goto invalid_entry;
+        continue;
       }
       char* func_name = $chk_calloc (sizeof (char), MAX_FUNCNAME_LENGTH);
       auto nread = read_asciz (func_name, MAX_FUNCNAME_LENGTH, file);
@@ -71,7 +71,7 @@ resolve_imports (
       {
         $trace_debug ("failed to read function name from hint/name");
         $chk_free (func_name);
-        goto invalid_entry;
+        continue;
       }
       func_name = $chk_realloc (func_name, nread + 1);
       $trace_debug (
@@ -82,19 +82,16 @@ resolve_imports (
       {
         $trace_debug (
           "failed to get function (%s): %s", ientry->module_name, func_name);
-        goto invalid_entry;
+        continue;
       }
-      fentry->name = func_name;
-      fentry->address = func_address;
+      fentry.name = func_name;
+      fentry.address = func_address;
       $trace_debug (
         "found function (%s@%p): %s@%p",
-        ientry->module_name, module, fentry->name, func_address);
+        ientry->module_name, module, fentry.name, func_address);
+      array$append (ientry->functions, &fentry);
     }
     continue;
-
-invalid_entry:
-    ientry->funcs = $chk_reallocarray (
-      ientry->funcs, sizeof (struct _import_func_entry), --ientry->nfuncs);
   }
   return true;
 }
@@ -103,56 +100,50 @@ bool
 pe$read_import_descriptors (pe_context_t pe_context, uint32_t offset)
 {
   auto file = pe_context->stream;
+  pe_context->imports = array$new (sizeof (struct import_entry));
   for (size_t i = 0;; ++i)
   {
     fseek (
       file, offset + i * sizeof (struct image_import_descriptor), SEEK_SET);
-    pe_context->imports.array = $chk_reallocarray (
-        pe_context->imports.array, sizeof (struct _import_entry),
-        ++pe_context->imports.size);
-    auto ientry = &pe_context->imports.array[pe_context->imports.size - 1];
-    /* NB: `reallocarray` doesn't zero memory like `calloc` :( */
-    memset (ientry, 0, sizeof (*ientry));
-    if (!$read_type (ientry->descriptor, file))
+    struct import_entry ientry = { 0 };
+    if (!$read_type (ientry.descriptor, file))
     {
       $trace_debug ("failed to read import descriptor");
-      return false;
+      goto fail;
     }
-    if (!ientry->descriptor.characteristics)
-    {  /* sentinel descriptor */
-      if (pe_context->imports.size)
-        pe_context->imports.array = $chk_reallocarray (
-          pe_context->imports.array, sizeof (struct _import_entry),
-          --pe_context->imports.size);
-      break;
-    }
+    if (!ientry.descriptor.characteristics)
+      break; /* sentinel descriptor */
     auto name_offset = pe$find_fileoffs_by_rva (
-      pe_context, NULL, ientry->descriptor.name);
+      pe_context, NULL, ientry.descriptor.name);
     if (!name_offset)
     {
       $trace_debug ("failed to find IDT name");
       continue; 
     }
-    ientry->module_name = $chk_calloc (sizeof (char), MAX_PATH);
+    ientry.module_name = $chk_calloc (sizeof (char), MAX_PATH);
     fseek (file, name_offset, SEEK_SET);
-    auto nread = read_asciz (ientry->module_name, MAX_PATH, file);
+    auto nread = read_asciz (ientry.module_name, MAX_PATH, file);
     if (!nread)
     {
       $trace_debug ("failed to read IDT name");
-      $chk_free (ientry->module_name);
-      continue;
+      goto entry_fail;
     }
-    ientry->module_name = $chk_realloc (ientry->module_name, nread);
-    if (!resolve_imports (pe_context, ientry))
+    ientry.module_name = $chk_realloc (ientry.module_name, nread);
+    if (!resolve_imports (pe_context, &ientry))
     {
       $trace_debug (
-        "failed to resolve imports for module: %s", ientry->module_name);
-      $chk_free (ientry->module_name);
-      pe_context->imports.array = $chk_reallocarray (
-        pe_context->imports.array, sizeof (struct _import_entry),
-        --pe_context->imports.size);
-      continue;
+        "failed to resolve imports for module: %s", ientry.module_name);
+      goto fail;
     }
+    array$append (pe_context->imports, &ientry);
+    continue;
+
+entry_fail:
+    $chk_free (ientry.module_base);
   }
   return true;
+
+fail:
+  array$free (pe_context->imports);
+  return false;
 }

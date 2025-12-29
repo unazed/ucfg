@@ -9,6 +9,7 @@
 #include "stdio.h"
 #include "trace.h"
 #include "platform.h"
+#include "array.h"
 
 #define $offset_between_opthdr(memb1, memb2) \
   $offset_between (struct image_optional_header, memb1, memb2)
@@ -197,26 +198,24 @@ void
 pe$free (pe_context_t pe_context)
 {
   $trace_debug ("freeing PE context");
-  $chk_free (pe_context->tls.callbacks);
-  for (size_t i = 0; i < pe_context->exports.nfuncs; ++i)
+  array$free (pe_context->tls.callbacks);
+  $array_for_each (
+    $, pe_context->exports.functions, struct export_func_entry, entry)
   {
-    auto entry = pe_context->exports.array[i];
-    $chk_free (entry.func_name);
+    $chk_free ($.entry->func_name);
   }
-  $chk_free (pe_context->exports.array);
-  for (size_t i = 0; i < pe_context->imports.size; ++i)
+  array$free (pe_context->exports.functions);
+  $array_for_each ($, pe_context->imports, struct import_entry, entry)
   {
-    auto ientry = pe_context->imports.array[i];
-    for (size_t j = 0; j < ientry.nfuncs; ++j)
+    $array_for_each ($$, $.entry->functions, struct import_func_entry, fentry)
     {
-      auto func = ientry.funcs[j];
-      $chk_free (func.name);
+      $chk_free ($$.fentry->name);
     }
-    platform_free_library (ientry.module_base);
-    $chk_free (ientry.funcs);
-    $chk_free (ientry.module_name);
+    platform_free_library ($.entry->module_base);
+    array$free ($.entry->functions);
+    $chk_free ($.entry->module_name);
   }
-  $chk_free (pe_context->imports.array);
+  array$free (pe_context->imports);
   $chk_free (pe_context->section_headers.array);
   $chk_free (pe_context);
 }

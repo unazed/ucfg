@@ -54,6 +54,8 @@
       (size_t)_size * (size_t)_nmemb); \
     ptr; \
   })
+#define $chk_allocb(size) $chk_calloc (sizeof (uint8_t), (size))
+#define $chk_allocty(ty) $chk_calloc (1, $ptrsize (ty))
 #define $chk_free(ptr) \
   ({ \
     auto _ptr = (ptr); \
@@ -70,6 +72,9 @@
       $abort ( \
         "realloc: failed to reallocate to %zu bytes (" #ptr ")", \
         (size_t)_size * (size_t)_nmemb); \
+    $trace_alloc ( \
+      "realloc: reallocated buffer to %zu bytes (" #ptr ")", \
+      (size_t)_size * (size_t)_nmemb); \
     new; \
   })
 #define $chk_realloc(ptr, size) $chk_reallocarray (ptr, size, 1)

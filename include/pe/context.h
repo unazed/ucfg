@@ -3,12 +3,33 @@
 #include <stdio.h>
 
 #include "generic.h"
+#include "array.h"
 #include "pe/format.h"
-#include "sys/cdefs.h"
 
 #define PE_CONTEXT_LOAD_IMPORT_DIRECTORY (1ull << 0)
 #define PE_CONTEXT_LOAD_EXPORT_DIRECTORY (1ull << 1)
 #define PE_CONTEXT_LOAD_TLS_DIRECTORY    (1ull << 2)
+
+struct export_func_entry
+{
+  char* func_name;
+  uint16_t ordinal;  /* unbiased */
+  struct image_export_table_entry rva;
+};
+
+struct import_func_entry
+{
+  char* name;
+  void* address;
+};
+
+struct import_entry
+{
+  struct image_import_descriptor descriptor;
+  char* module_name;
+  void* module_base;
+  array_t /* struct import_func_entry */ functions;
+};
 
 typedef struct
 {
@@ -23,35 +44,13 @@ typedef struct
   struct
   {
     struct image_export_directory descriptor;
-    struct _export_func_entry
-    {
-      char* func_name;
-      uint16_t ordinal;  /* unbiased */
-      struct image_export_table_entry rva;
-    } *array;
-    size_t nfuncs;
+    array_t /* struct export_func_entry */ functions;
   } exports;
-  struct
-  {
-    struct _import_entry
-    {
-      struct image_import_descriptor descriptor;
-      char* module_name;
-      void* module_base;
-      struct _import_func_entry
-      {
-        char* name;
-        void* address;
-      } *funcs;
-      size_t nfuncs;
-    } *array;
-    size_t size;
-  } imports;
+  array_t /* struct import_entry */ imports;
   struct
   {
     struct image_tls_table descriptor;
-    uint64_t* callbacks;
-    size_t ncallbacks;
+    array_t callbacks;
   } tls;
 } *pe_context_t;
 

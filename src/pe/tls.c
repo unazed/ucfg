@@ -5,6 +5,9 @@ pe$read_tls_directory (pe_context_t pe_context, uint32_t offset)
 {
   auto file = pe_context->stream;
   auto tls = &pe_context->tls;
+
+  pe_context->tls.callbacks = array$new (sizeof (uint64_t));
+
   fseek (file, offset, SEEK_SET);
   if (!pe$read_maxint (&tls->descriptor.raw_data_start, pe_context)
       || !pe$read_maxint (&tls->descriptor.raw_data_end, pe_context)
@@ -37,15 +40,12 @@ pe$read_tls_directory (pe_context_t pe_context, uint32_t offset)
     if (!callback_address)
       break;
     $trace_debug ("found TLS callback: %" PRIx64, callback_address);
-    tls->callbacks = $chk_reallocarray (
-      tls->callbacks, sizeof (uint64_t), ++tls->ncallbacks);
-    tls->callbacks[tls->ncallbacks-1] = callback_address;
+    array$append (tls->callbacks, &callback_address);
   }
   return true;
 
 fail:
-  $chk_free (tls->callbacks);
+  array$free (tls->callbacks);
   tls->callbacks = NULL;
-  tls->ncallbacks = 0;
   return false;
 }
