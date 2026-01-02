@@ -15,3 +15,5 @@ void* map$get (map_t, hashnum_t key);
 void map$remove (map_t, hashnum_t key);
 bool map$contains (map_t, hashnum_t key);
 bool map$is_empty (map_t);
+hashnum_t map$compute_hash_sized (void* buff, size_t size);
+hashnum_t map$compute_hash (uint64_t octet);

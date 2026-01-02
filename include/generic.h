@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdbool.h>
+
 #include "trace.h"
 
 #define $ptrsize(ty) (sizeof (*(ty)(0)))
@@ -21,6 +22,22 @@
     auto _b = (b); \
     _a < _b ? _a : _b; \
   })
+#define $round_up_to(mult, n) \
+  ({ \
+    auto _mult = (mult); \
+    auto _n = (n); \
+    (_n + _mult - 1) & ~(_mult - 1); \
+  })
+
+#ifdef STRICT
+# define $strict_assert(cond, msg) \
+  ({ \
+    if (!(cond)) \
+      $abort ("strict assertion failed: " msg " (" #cond ")"); \
+  })
+#else
+# define $strict_assert(cond, msg) ({ })
+#endif
 
 #define __builtin_unimplemented() $abort ("unimplemented")
 #define auto __auto_type

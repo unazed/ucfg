@@ -46,4 +46,6 @@ void array$remove (array_t, size_t idx);
 void** array$at (array_t, size_t idx);
 void array$pop (array_t, void* into, size_t idx);
 size_t array$length (array_t);
+size_t array$capacity (array_t);
+bool array$is_empty (array_t);
 void array$allocopts (array_t, struct array_allocopts opts);

@@ -4,8 +4,8 @@
 #include "array.h"
 #include "trace.h"
 
-#define MEMBER_ALIGNMENT      (8)
-#define INITIAL_BYTE_CAPACITY (256)
+#define MEMBER_ALIGNMENT      (8ull)
+#define INITIAL_BYTE_CAPACITY (64ull)
 
 static const struct array_allocopts g_default_allocopts = {
   .alloc_nmemb_increment  = 4,
@@ -22,12 +22,6 @@ struct _array
   size_t membsize, membsize_unaligned;
   struct array_allocopts allocopts;
 };
-
-static size_t
-round_up_to (size_t mult, size_t n)
-{
-  return (n + mult - 1) & ~(mult - 1);
-}
 
 static bool
 is_tuple (array_t array)
@@ -134,10 +128,10 @@ array$new (size_t membsize)
     "creating new array with member size: %zu byte(s) (@%p)",
     membsize, array);
   array->allocopts = g_default_allocopts;
-  array->capacity = INITIAL_BYTE_CAPACITY;
-  array->raw = $chk_allocb (array->capacity);
-  array->membsize = round_up_to (MEMBER_ALIGNMENT, membsize);
+  array->membsize = $round_up_to (MEMBER_ALIGNMENT, membsize);
   array->membsize_unaligned = membsize;
+  array->capacity = $max (array->membsize, INITIAL_BYTE_CAPACITY);
+  array->raw = $chk_allocb (array->capacity);
   return array;
 }
 
@@ -217,6 +211,18 @@ array$length (array_t array)
   return array->nmemb;
 }
 
+size_t
+array$capacity (array_t array)
+{
+  return array->capacity / array->membsize;
+}
+
+bool
+array$is_empty (array_t array)
+{
+  return !array$length (array);
+}
+
 void
 array$allocopts (array_t array, struct array_allocopts opts)
 {
@@ -233,10 +239,11 @@ array$allocopts (array_t array, struct array_allocopts opts)
   array->allocopts.alloc_nmemb_increment = opts.alloc_nmemb_increment;
   $trace_debug (
     "configuring allocation options for array (%p): "
-    "min_nmemb=%zu, max_nmemb=%zu, alloc. increment=%zu, trim threshold=%zu",
+    "min./max. memb=%zu/%zu, alloc. increment=%zu, trim threshold=%zu",
     array, opts.min_nmemb, opts.max_nmemb, opts.alloc_nmemb_increment,
     opts.trim_nmemb_threshold);
   auto min_capacity = opts.min_nmemb * array->membsize;
+  array->nmemb = opts.min_nmemb;
   if (array->capacity < min_capacity)
   {
     $trace_debug (

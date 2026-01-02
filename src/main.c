@@ -1,9 +1,10 @@
 #include <capstone/capstone.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <string.h>
 
-#include "capstone/x86.h"
 #include "pe/context.h"
+#include "map.h"
 #include "trace.h"
 
 int
