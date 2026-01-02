@@ -48,4 +48,6 @@ void array$pop (array_t, void* into, size_t idx);
 size_t array$length (array_t);
 size_t array$capacity (array_t);
 bool array$is_empty (array_t);
+bool array$contains (array_t, void* ptrmemb);
+void array$concat (array_t, array_t other);
 void array$allocopts (array_t, struct array_allocopts opts);

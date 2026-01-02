@@ -55,7 +55,7 @@
     ptr; \
   })
 #define $chk_allocb(size) $chk_calloc (sizeof (uint8_t), (size))
-#define $chk_allocty(ty) $chk_calloc (1, $ptrsize (ty))
+#define $chk_allocty(ty) ((ty)$chk_calloc (1, $ptrsize (ty)))
 #define $chk_free(ptr) \
   ({ \
     auto _ptr = (ptr); \

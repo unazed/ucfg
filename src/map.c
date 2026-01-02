@@ -117,7 +117,6 @@ void
 map$set (map_t map, hashnum_t key, void* value)
 {
   auto bucket = get_bucket_for_key (map, key);
-  $strict_assert (bucket.entries != NULL, "Bucket entries array is NULL");
   struct map_bucket_entry entry = { .hashnum = key, .value = value };
   if (array$length (bucket->entries))  /* maybe collision? */
   {
@@ -187,4 +186,20 @@ map$is_empty (map_t map)
       return false;
   }
   return true;
+}
+
+void
+map$for_each_pair (map_t map, iter_foreach_t callback, void* data)
+{
+  $map_for_each_bucket ($, map, bucket)
+  {
+    $bucket_for_each_entry ($$, $.bucket, entry)
+    {
+      if (!callback (data, $$.entry->hashnum, $$.entry->value))
+        goto ret;
+    }
+  }
+  
+ret:
+  return;
 }

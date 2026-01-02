@@ -205,6 +205,29 @@ array$pop (array_t array, void* into, size_t idx)
   array$remove (array, idx);
 }
 
+void
+array$concat (array_t array, array_t other)
+{
+  $strict_assert (
+    array->membsize_unaligned == other->membsize_unaligned,
+    "Cannot concatenate size-incompatible arrays");
+  $array_for_each ($, other, void*, memb)
+  {
+    array$append (array, $.memb);
+  }
+}
+
+bool
+array$contains (array_t array, void* ptrmemb)
+{
+  $array_for_each ($, array, void*, memb)
+  {
+    if (!memcmp ($.memb, ptrmemb, array->membsize_unaligned))
+      return true;
+  }
+  return false;
+}
+
 size_t
 array$length (array_t array)
 {
