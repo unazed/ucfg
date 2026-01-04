@@ -80,6 +80,24 @@ graph$add (graph_t graph, void* metadata)
   return tag;
 }
 
+vertex_tag_t
+graph$add_tagged (graph_t graph, vertex_tag_t tag, void* metadata)
+{
+  $trace_debug ("adding new node with preset tag %zu", tag);
+#ifdef STRICT
+  $array_for_each ($, graph->vertices, struct graph_vertex, vertex)
+  {
+    if ($.vertex->tag == tag)
+      $abort ("preset tag already exists in vertices");
+  }
+#endif
+  struct graph_vertex vertex = { .metadata = metadata, .tag = tag };
+  array$append (graph->vertices, &vertex);
+  auto edges = array$new (sizeof (vertex_tag_t));
+  map$set (graph->map_vertex_edges, tag, edges);
+  return tag;
+}
+
 void
 digraph$connect (graph_t graph, vertex_tag_t a, vertex_tag_t b)
 {

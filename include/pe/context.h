@@ -21,6 +21,7 @@ struct import_func_entry
 {
   char* name;
   void* address;
+  uint64_t iat_rva;
 };
 
 struct import_entry
@@ -28,6 +29,7 @@ struct import_entry
   struct image_import_descriptor descriptor;
   char* module_name;
   void* module_base;
+  uint64_t iat_rva;
   array_t /* struct import_func_entry */ functions;
 };
 
@@ -71,5 +73,6 @@ uint64_t pe$va_to_rva (pe_context_t pe_context, uint64_t address);
 int pe$read_maxint (uint64_t* into, pe_context_t pe_context);
 uint64_t pe$find_directory_fileoffs (pe_context_t pe_context, uint8_t index);
 uint32_t pe$get_pagesize (pe_context_t pe_context);
+size_t pe$get_ptrsize (pe_context_t pe_context);
 __attribute__ (( malloc(free, 1) ))
 uint8_t* pe$read_page_at (pe_context_t pe_context, uint64_t rva);

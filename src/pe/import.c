@@ -88,8 +88,8 @@ resolve_imports (
       fentry.name = func_name;
       fentry.address = func_address;
       $trace_debug (
-        "found function (%s@%p): %s@%p",
-        ientry->module_name, module, fentry.name, func_address);
+        "found function: %s (rva. %" PRIx64 ")",
+        fentry.name, ientry->iat_rva + pe$get_ptrsize (pe_context) * i);
       array$append (ientry->functions, &fentry);
     }
     continue;
@@ -130,6 +130,7 @@ pe$read_import_descriptors (pe_context_t pe_context, uint32_t offset)
       goto entry_fail;
     }
     ientry.module_name = $chk_realloc (ientry.module_name, nread);
+    ientry.iat_rva = ientry.descriptor.first_thunk;
     if (!resolve_imports (pe_context, &ientry))
     {
       $trace_debug (

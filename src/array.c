@@ -123,7 +123,7 @@ check_index_bounds (array_t array, size_t idx)
 array_t
 array$new (size_t membsize)
 {
-  array_t array = $chk_allocty (array_t);
+  auto array = $chk_allocty (array_t);
   $trace_debug (
     "creating new array with member size: %zu byte(s) (@%p)",
     membsize, array);
@@ -135,6 +135,16 @@ array$new (size_t membsize)
   return array;
 }
 
+array_t
+array$from_existing (void* ptr, size_t n, size_t membsize)
+{
+  auto array = array$new (membsize);
+  uint8_t* as_char = ptr;
+  for (size_t i = 0; i < n; ++i)
+    array$append (array, &as_char[membsize * i]);
+  return array;
+}
+
 void
 array$free (array_t array)
 {
@@ -143,7 +153,7 @@ array$free (array_t array)
   $chk_free (array);
 }
 
-void**
+void*
 array$append (array_t array, void* ptrmemb)
 {
   $trace_debug ("appending member to array: %p", array);
@@ -153,7 +163,7 @@ array$append (array_t array, void* ptrmemb)
   return newmemb;
 }
 
-void**
+void*
 array$insert (array_t array, size_t idx, void* ptrmemb)
 {
   if (idx == array->nmemb)
@@ -189,7 +199,7 @@ ret:
   maybe_downsize_array (array);
 }
 
-void**
+void*
 array$at (array_t array, size_t idx)
 {
   check_index_bounds (array, idx);
@@ -215,6 +225,17 @@ array$concat (array_t array, array_t other)
   {
     array$append (array, $.memb);
   }
+}
+
+bool
+array$contains_rval (array_t array, uint64_t memb)
+{
+  $array_for_each ($, array, void*, comp)
+  {
+    if (*(uint64_t *)$.comp == memb)
+      return true;
+  }
+  return false;
 }
 
 bool

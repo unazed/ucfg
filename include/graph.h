@@ -12,6 +12,7 @@ __attribute__ (( malloc(graph$free, 1) ))
 graph_t graph$new (void);
 
 vertex_tag_t graph$add (graph_t, void* metadata);
+vertex_tag_t graph$add_tagged (graph_t, vertex_tag_t tag, void* metadata);
 void digraph$connect (graph_t, vertex_tag_t, vertex_tag_t);
 array_t digraph$get_egress (graph_t, vertex_tag_t);
 __attribute__(( malloc(array$free, 1) ))

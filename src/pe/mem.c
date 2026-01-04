@@ -1,5 +1,7 @@
 #include "generic.h"
 #include "pe/context.h"
+#include <stddef.h>
+#include <stdint.h>
 
 bool
 pe$is_image_x64 (pe_context_t pe_context)
@@ -108,6 +110,12 @@ pe$get_pagesize (pe_context_t pe_context)
   return pe_context->nt_header.optional_header.section_alignment;
 }
 
+size_t
+pe$get_ptrsize (pe_context_t pe_context)
+{
+  return pe$is_image_x64 (pe_context)? sizeof (uint64_t): sizeof (uint32_t);
+}
+
 uint8_t*
 pe$read_page_at (pe_context_t pe_context, uint64_t rva)
 {
@@ -124,7 +132,7 @@ pe$read_page_at (pe_context_t pe_context, uint64_t rva)
   if (!read_sized (page_alloc, read_size, file))
   {
     $trace_debug ("failed to read page from file");
-    free (page_alloc);
+    $chk_free (page_alloc);
     return NULL;
   }
   return page_alloc;
