@@ -1,5 +1,6 @@
 #include "cfg.h"
 #include "graph.h"
+#include "bitmap.h"
 
 struct _cfg_basic_block
 {
@@ -16,6 +17,7 @@ struct _cfg_function_block
 struct _cfg
 {
   graph_t functions;
+  bitmap_t address_bitmap;
   uint64_t image_base;
 };
 
@@ -34,10 +36,11 @@ get_basic_metadata (
 }
 
 cfg_t
-cfg$new (uint64_t image_base)
+cfg$new (uint64_t image_base, uint64_t executable_size)
 {
   auto cfg = $chk_allocty (cfg_t);
   cfg->functions = graph$new ();
+  cfg->address_bitmap = bitmap$new (executable_size);
   cfg->image_base = image_base;
   return cfg;
 }
@@ -100,4 +103,10 @@ cfg$set_basic_block_end (
   auto basic_meta = get_basic_metadata (
     cfg, fn_tag, basic_tag);
   basic_meta->size = address - basic_meta->rva;
+}
+
+bool
+cfg$is_address_overlapping (cfg_t cfg, uint64_t address)
+{
+  return false;
 }

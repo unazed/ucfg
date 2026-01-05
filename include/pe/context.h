@@ -38,11 +38,7 @@ typedef struct
   FILE* stream;
   struct image_dos_header dos_header;
   struct image_nt_headers nt_header;
-  struct
-  {
-    struct image_section_header* array;
-    size_t size;
-  } section_headers;
+  array_t /* struct image_section_header */ section_headers;
   struct
   {
     struct image_export_directory descriptor;
@@ -57,6 +53,7 @@ typedef struct
 } *pe_context_t;
 
 void pe$free (pe_context_t pe_context);
+
 __attribute__ (( malloc(pe$free, 1)))
 pe_context_t pe$from_file (FILE* file, uint8_t flags);
 

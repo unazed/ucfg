@@ -59,14 +59,12 @@ pe$read_maxint (uint64_t* into, pe_context_t pe_context)
 static struct image_section_header*
 find_section_by_rva (pe_context_t pe_context, uint64_t rva)
 {
-  auto nr_sections = pe_context->section_headers.size;
-  auto section_headers = pe_context->section_headers.array;
-  for (size_t i = 0; i < nr_sections; ++i)
+  $array_for_each (
+    $, pe_context->section_headers, struct image_section_header, section)
   {
-    auto section = &section_headers[i];
-    if ((section->virtual_address <= rva)
-        && (rva < section->virtual_address + section->misc.virtual_size))
-      return section;
+    if (($.section->virtual_address <= rva)
+        && (rva < $.section->virtual_address + $.section->misc.virtual_size))
+      return $.section;
   }
   return NULL;
 }

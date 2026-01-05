@@ -7,5 +7,6 @@ CompileFlags:
     - --target=x86_64-w64-mingw32
     - -Wall -Werror -Wextra
     - -Wno-ignored-attributes
+    - -Wno-pragma-pack
     - -DSTRICT
   Compiler: clang

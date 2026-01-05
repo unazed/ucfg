@@ -7,6 +7,7 @@
 
 #include "capstone/x86.h"
 #include "pe/context.h"
+#include "pe/format.h"
 #include "trace.h"
 #include "cfg.h"
 
@@ -179,6 +180,19 @@ recurse_function_block (
   return success;
 }
 
+array_t /* struct image_section_header */
+find_executable_sections (pe_context_t pe_context)
+{
+  array_t ex_sections = array$new (sizeof (struct image_section_header *));
+  $array_for_each (
+    $, pe_context->section_headers, struct image_section_header, section)
+  {
+    if ($.section->characteristics & IMAGE_SCN_MEM_EXECUTE)
+      array$append (ex_sections, $.section);
+  }
+  return ex_sections;
+}
+
 int
 main (int argc, const char* argv[])
 {
@@ -196,6 +210,12 @@ main (int argc, const char* argv[])
   if (pe_context == NULL)
     $abort ("failed to create PE context from file");
 
+  auto ex_sections = find_executable_sections (pe_context);
+  if (array$is_empty (ex_sections))
+    $abort ("failed to find any executable sections");
+  if (array$length (ex_sections) > 1)
+    $trace ("note: application has more than one executable section");
+
   if (array$is_empty (pe_context->tls.callbacks))
     $abort ("no valid application entrypoint");
   auto entry_point = pe$va_to_rva (
@@ -205,8 +225,11 @@ main (int argc, const char* argv[])
   if (cs_open (CS_ARCH_X86, CS_MODE_64, &handle) != CS_ERR_OK)
     $abort ("failed to initialize Capstone");
   cs_option (handle, CS_OPT_DETAIL, CS_OPT_ON);
-  
-  auto cfg = cfg$new (pe$get_image_base (pe_context));
+
+  auto cfg = cfg$new (
+    pe$get_image_base (pe_context),
+    ((struct image_section_header *)array$at (ex_sections, 0))
+      ->size_of_raw_data);
   if (!recurse_function_block (pe_context, cfg, 0, handle, entry_point))
     $abort ("failed to generate basic blocks");
 

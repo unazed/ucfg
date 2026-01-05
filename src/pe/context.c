@@ -1,7 +1,5 @@
 #include <stdbool.h>
 #include <stdint.h>
-#include <stdlib.h>
-#include <string.h>
 
 #include "pe/context.h"
 #include "pe/format.h"
@@ -131,21 +129,24 @@ pe$from_file (FILE* file, uint8_t flags)
 
   auto nr_sections = pe_context->nt_header.file_header.number_of_sections;
   auto array_size = nr_sections * sizeof (struct image_section_header);
-  auto section_headers = pe_context->section_headers.array
-    = $chk_calloc (array_size, 1);
-  pe_context->section_headers.size = nr_sections;
+  auto section_headers = $chk_calloc (array_size, 1);
 
   if (!read_sized (section_headers, array_size, file))
     goto fail;
 
-  for (size_t i = 0; i < nr_sections; ++i)
+  pe_context->section_headers = array$from_existing (
+    section_headers, nr_sections, sizeof (struct image_section_header));
+  $chk_free (section_headers);
+
+  $array_for_each (
+    $, pe_context->section_headers, struct image_section_header, section)
   {
-    auto section = section_headers[i]; (void)section;
     $trace_debug (
       "section '%.8s' at file offset %" PRIx32 " (virt. %" PRIx32 "), size %"
       PRIu32 " bytes (virt. %" PRIu32 " bytes)",
-      section.name, section.pointer_to_raw_data, section.virtual_address,
-      section.size_of_raw_data, section.misc.virtual_size);
+      $.section->name, $.section->pointer_to_raw_data,
+      $.section->virtual_address, $.section->size_of_raw_data,
+      $.section->misc.virtual_size);
   }
 
   if (flags & PE_CONTEXT_LOAD_IMPORT_DIRECTORY)
@@ -216,6 +217,6 @@ pe$free (pe_context_t pe_context)
     $chk_free ($.entry->module_name);
   }
   array$free (pe_context->imports);
-  $chk_free (pe_context->section_headers.array);
+  array$free (pe_context->section_headers);
   $chk_free (pe_context);
 }
