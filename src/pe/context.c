@@ -18,7 +18,7 @@ validate_dos_header (pe_context_t pe_context)
   auto dos_header = pe_context->dos_header;
   if (dos_header.e_magic != 0x5a4d)
   {
-    $trace_debug (
+    $trace_err (
       "invalid file DOS header magic number, got: %" PRIu16,
       dos_header.e_magic);
     return false;
@@ -33,7 +33,7 @@ validate_nt_headers (pe_context_t pe_context)
   auto nt_header = pe_context->nt_header;
   if (nt_header.signature != IMAGE_NT_PE_SIGNATURE)
   {
-    $trace_debug (
+    $trace_err (
       "invalid NT header signature, got: %" PRIx32 ", expected: %" PRIx32,
       nt_header.signature, IMAGE_NT_PE_SIGNATURE);
     return false;
@@ -53,7 +53,7 @@ validate_nt_headers (pe_context_t pe_context)
         optional_header.bases._64.image_base);
       break;
     default:
-      $trace_debug (
+      $trace_err (
         "invalid optional header magic number: %" PRIx16,
         optional_header.magic);
       return false;
@@ -79,7 +79,7 @@ pe$from_file (FILE* file, uint8_t flags)
     goto fail;
   if (!validate_dos_header (pe_context))
   {
-    $trace_debug ("invalid file DOS header");
+    $trace_err ("invalid file DOS header");
     goto fail;
   }
 
@@ -105,7 +105,7 @@ pe$from_file (FILE* file, uint8_t flags)
     case IMAGE_NT_OPTIONAL_HDR64_MAGIC:
       break;
     default:
-      $trace_debug (
+      $trace_err (
         "invalid optional header magic number: %" PRIx16,
         optional_header->magic);
       goto fail;
@@ -123,7 +123,7 @@ pe$from_file (FILE* file, uint8_t flags)
 
   if (!validate_nt_headers (pe_context))
   {
-    $trace_debug ("failed to validate NT headers");
+    $trace_err ("failed to validate NT headers");
     goto fail;
   }
 
@@ -155,7 +155,7 @@ pe$from_file (FILE* file, uint8_t flags)
       pe_context, IMAGE_DIRECTORY_ENTRY_IMPORT);
     if (!import_offset)
     {
-      $trace_debug ("failed to find import directory file offset");
+      $trace_err ("failed to find import directory file offset");
       goto fail;
     }
     if (!pe$read_import_descriptors (pe_context, import_offset))
@@ -168,7 +168,7 @@ pe$from_file (FILE* file, uint8_t flags)
       pe_context, IMAGE_DIRECTORY_ENTRY_EXPORT);
     if (!export_offset)
     {
-      $trace_debug ("failed to find export directory file offset");
+      $trace_err ("failed to find export directory file offset");
       goto fail;
     }
     if (!pe$read_export_descriptors (pe_context, export_offset))
@@ -181,7 +181,7 @@ pe$from_file (FILE* file, uint8_t flags)
       pe_context, IMAGE_DIRECTORY_ENTRY_TLS);
     if (!tls_offset)
     {
-      $trace_debug ("failed to find TLS directory file offset");
+      $trace_err ("failed to find TLS directory file offset");
       goto fail;
     }
     if (!pe$read_tls_directory (pe_context, tls_offset))
@@ -200,21 +200,27 @@ pe$free (pe_context_t pe_context)
 {
   $trace_debug ("freeing PE context");
   array$free (pe_context->tls.callbacks);
-  $array_for_each (
-    $, pe_context->exports.functions, struct export_func_entry, entry)
+  if (pe_context->exports.functions != NULL)
   {
-    $chk_free ($.entry->func_name);
+    $array_for_each (
+      $, pe_context->exports.functions, struct export_func_entry, entry)
+    {
+      $chk_free ($.entry->func_name);
+    }
   }
   array$free (pe_context->exports.functions);
-  $array_for_each ($, pe_context->imports, struct import_entry, entry)
+  if (pe_context->imports != NULL)
   {
-    $array_for_each ($$, $.entry->functions, struct import_func_entry, fentry)
+    $array_for_each ($, pe_context->imports, struct import_entry, entry)
     {
-      $chk_free ($$.fentry->name);
+      $array_for_each ($$, $.entry->functions, struct import_func_entry, fentry)
+      {
+        $chk_free ($$.fentry->name);
+      }
+      platform_free_library ($.entry->module_base);
+      array$free ($.entry->functions);
+      $chk_free ($.entry->module_name);
     }
-    platform_free_library ($.entry->module_base);
-    array$free ($.entry->functions);
-    $chk_free ($.entry->module_name);
   }
   array$free (pe_context->imports);
   array$free (pe_context->section_headers);

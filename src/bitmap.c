@@ -48,9 +48,33 @@ bitmap$free (bitmap_t bitmap)
 void
 bitmap$set (bitmap_t bitmap, size_t idx)
 {
+  $trace_debug ("trying to set bitmap index %zu (bitmap size %zu)", idx, bitmap->size);
   $strict_assert (idx < bitmap->size, "Bitmap index out of bounds");
   auto index = get_bitmap_index (bitmap, idx);
   bitmap->array[index.idx] |= 1u << index.offset;
+}
+
+void
+bitmap$set_range (bitmap_t bitmap, size_t start, size_t end)
+{
+  $strict_assert (
+    start < end && end <= bitmap->size,
+    "Invalid or out of bounds bitmap indices");
+  $trace_debug ("setting bit-range from %zu to %zu exclusive", start, end);
+  auto start_index = get_bitmap_index (bitmap, start);
+  auto end_index = get_bitmap_index (bitmap, end - 1);
+
+  if (start_index.idx == end_index.idx)
+  {
+    bitmap->array[start_index.idx] 
+      |= $bits_range (start_index.offset, end_index.offset);
+    return;
+  }
+
+  bitmap->array[start_index.idx] |= $bits_from (start_index.offset);
+  for (size_t i = start_index.idx + 1; i < end_index.idx; ++i)
+    bitmap->array[i] = (typeof (*bitmap->array))(-1);
+  bitmap->array[end_index.idx] |= $bits_up_to (end_index.offset);
 }
 
 bool

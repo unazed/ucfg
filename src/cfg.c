@@ -80,6 +80,7 @@ cfg$add_basic_block (cfg_t cfg, vertex_tag_t fn_tag, uint64_t address)
   auto basic_meta = $chk_allocty (struct _cfg_basic_block *);
   basic_meta->rva = address; 
   auto tag = graph$add_tagged (fn_meta->basic_blocks, address, basic_meta);
+  bitmap$set (cfg->address_bitmap, address);
   return tag;
 }
 
@@ -93,6 +94,7 @@ cfg$add_basic_block_succ (
   basic_meta->rva = address; 
   auto new_tag = graph$add_tagged (fn_meta->basic_blocks, address, basic_meta);
   digraph$connect (fn_meta->basic_blocks, basic_tag, new_tag);
+  bitmap$set (cfg->address_bitmap, address);
   return new_tag;
 }
 
@@ -103,10 +105,11 @@ cfg$set_basic_block_end (
   auto basic_meta = get_basic_metadata (
     cfg, fn_tag, basic_tag);
   basic_meta->size = address - basic_meta->rva;
+  bitmap$set_range (cfg->address_bitmap, basic_meta->rva, address);
 }
 
 bool
 cfg$is_address_overlapping (cfg_t cfg, uint64_t address)
 {
-  return false;
+  return bitmap$test (cfg->address_bitmap, address);
 }

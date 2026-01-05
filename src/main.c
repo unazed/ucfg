@@ -183,7 +183,7 @@ recurse_function_block (
 array_t /* struct image_section_header */
 find_executable_sections (pe_context_t pe_context)
 {
-  array_t ex_sections = array$new (sizeof (struct image_section_header *));
+  array_t ex_sections = array$new (sizeof (struct image_section_header));
   $array_for_each (
     $, pe_context->section_headers, struct image_section_header, section)
   {
@@ -226,10 +226,10 @@ main (int argc, const char* argv[])
     $abort ("failed to initialize Capstone");
   cs_option (handle, CS_OPT_DETAIL, CS_OPT_ON);
 
+  auto ex_section = (struct image_section_header *)array$at (ex_sections, 0);
   auto cfg = cfg$new (
-    pe$get_image_base (pe_context),
-    ((struct image_section_header *)array$at (ex_sections, 0))
-      ->size_of_raw_data);
+    pe$get_image_base (pe_context), ex_section->size_of_raw_data);
+  array$free (ex_sections);
   if (!recurse_function_block (pe_context, cfg, 0, handle, entry_point))
     $abort ("failed to generate basic blocks");
 

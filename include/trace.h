@@ -12,6 +12,7 @@
   printf (_$fmt_trace (prefix, fmt),##__VA_ARGS__)
 
 #define $trace(...) _$printf_trace ("std",##__VA_ARGS__)
+#define $trace_err(...) _$printf_trace ("error",##__VA_ARGS__)
 #define $abort(fmt, ...) \
   { \
     fprintf (stderr, _$fmt_trace ("abort", fmt),##__VA_ARGS__); \
@@ -59,8 +60,11 @@
 #define $chk_free(ptr) \
   ({ \
     auto _ptr = (ptr); \
-    $trace_alloc ("freeing data: %p (" #ptr ")", _ptr); \
-    free (_ptr); \
+    if (_ptr != NULL) \
+    { \
+      $trace_alloc ("freeing data: %p (" #ptr ")", _ptr); \
+      free (_ptr); \
+    } \
   })
 #define $chk_reallocarray(ptr, size, nmemb) \
   ({ \

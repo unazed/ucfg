@@ -149,7 +149,8 @@ void
 array$free (array_t array)
 {
   $trace_debug ("freeing array");
-  $chk_free (array->raw);
+  if (array != NULL)
+    $chk_free (array->raw);
   $chk_free (array);
 }
 
