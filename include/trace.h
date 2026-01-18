@@ -18,6 +18,12 @@
     fprintf (stderr, _$fmt_trace ("abort", fmt),##__VA_ARGS__); \
     exit (EXIT_FAILURE); \
   }
+#define $abort_dbg(fmt, ...) \
+  { \
+    fprintf (stderr, _$fmt_trace ("abort", fmt),##__VA_ARGS__); \
+    __asm__ ("int3"); \
+    exit (EXIT_FAILURE); \
+  }
 
 #define $trace_alloc(...)   ({})
 #define $trace_debug(...)   ({})

@@ -5,6 +5,7 @@
 
 typedef struct _graph *graph_t;
 typedef uint64_t vertex_tag_t;
+typedef bool (*iter_vertex_t)(vertex_tag_t tag, void* metadata, void* param);
 
 void graph$free (graph_t);
 
@@ -23,3 +24,4 @@ void graph$connect (graph_t, vertex_tag_t, vertex_tag_t);
 void graph$disconnect (graph_t, vertex_tag_t, vertex_tag_t);
 void digraph$disconnect (graph_t, vertex_tag_t, vertex_tag_t);
 void* graph$metadata (graph_t, vertex_tag_t);
+bool graph$for_each_vertex (graph_t, iter_vertex_t callback, void* param);

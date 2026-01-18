@@ -7,7 +7,7 @@ COMMON_CFLAGS = -O0 -ggdb -Wall -Werror -Wextra -Iinclude/ -I/mingw64/include/ \
 
 CFG_DEFS := $(foreach cfg,$(filter CFG_%,$(.VARIABLES)),-D$(cfg))
 LDLIBPATH := /mingw64/lib
-LDFLAGS = -lcapstone
+LDFLAGS = -lcapstone -largp
 
 CFLAGS ?= $(COMMON_CFLAGS) $(CFG_DEFS)
 

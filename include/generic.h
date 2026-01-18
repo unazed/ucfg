@@ -33,7 +33,7 @@
 # define $strict_assert(cond, msg) \
   ({ \
     if (!(cond)) \
-      $abort ("strict assertion failed: " msg " (" #cond ")"); \
+      $abort_dbg ("strict assertion failed: " msg " (" #cond ")"); \
   })
 #else
 # define $strict_assert(cond, msg) ({ })

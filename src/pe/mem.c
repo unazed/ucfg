@@ -56,8 +56,8 @@ pe$read_maxint (uint64_t* into, pe_context_t pe_context)
   return nread;
 }
 
-static struct image_section_header*
-find_section_by_rva (pe_context_t pe_context, uint64_t rva)
+struct image_section_header*
+pe$find_section_by_rva (pe_context_t pe_context, uint64_t rva)
 {
   $array_for_each (
     $, pe_context->section_headers, struct image_section_header, section)
@@ -73,7 +73,7 @@ uint64_t
 pe$find_fileoffs_by_rva (
   pe_context_t pe_context, struct image_section_header** out, uint64_t rva)
 {
-  auto section = find_section_by_rva (pe_context, rva);
+  auto section = pe$find_section_by_rva (pe_context, rva);
   if (section == NULL)
     return 0;
   if (out != NULL)
@@ -115,7 +115,7 @@ pe$get_ptrsize (pe_context_t pe_context)
 }
 
 uint8_t*
-pe$read_page_at (pe_context_t pe_context, uint64_t rva)
+pe$read_sized (pe_context_t pe_context, uint64_t rva, uint64_t size)
 {
   auto file = pe_context->stream;
   auto offset = pe$find_fileoffs_by_rva (pe_context, NULL, rva);
@@ -125,13 +125,18 @@ pe$read_page_at (pe_context_t pe_context, uint64_t rva)
     return NULL;
   }
   fseek (file, offset, SEEK_SET);
-  auto read_size = pe$get_pagesize (pe_context);
-  auto page_alloc = $chk_calloc (sizeof (char), read_size);
-  if (!read_sized (page_alloc, read_size, file))
+  auto page_alloc = $chk_calloc (sizeof (char), size);
+  if (!read_sized (page_alloc, size, file))
   {
-    $trace_debug ("failed to read page from file");
+    $trace_debug ("failed to read %" PRIu64 " bytes from file", size);
     $chk_free (page_alloc);
     return NULL;
   }
   return page_alloc;
+}
+
+uint8_t*
+pe$read_page_at (pe_context_t pe_context, uint64_t rva)
+{
+  return pe$read_sized (pe_context, rva, pe$get_pagesize (pe_context));
 }

@@ -196,10 +196,7 @@ map$for_each_pair (map_t map, iter_foreach_t callback, void* data)
     $bucket_for_each_entry ($$, $.bucket, entry)
     {
       if (!callback (data, $$.entry->hashnum, $$.entry->value))
-        goto ret;
+        return;
     }
   }
-  
-ret:
-  return;
 }

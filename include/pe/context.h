@@ -52,24 +52,27 @@ typedef struct
   } tls;
 } *pe_context_t;
 
-void pe$free (pe_context_t pe_context);
+void pe$free (pe_context_t);
 
 __attribute__ (( malloc(pe$free, 1)))
 pe_context_t pe$from_file (FILE* file, uint8_t flags);
 
-bool pe$read_import_descriptors (pe_context_t pe_context, uint32_t offset);
-bool pe$read_export_descriptors (pe_context_t pe_context, uint32_t offset);
-bool pe$read_tls_directory (pe_context_t pe_context, uint32_t offset);
+bool pe$read_import_descriptors (pe_context_t, uint32_t offset);
+bool pe$read_export_descriptors (pe_context_t, uint32_t offset);
+bool pe$read_tls_directory (pe_context_t, uint32_t offset);
 uint64_t pe$find_fileoffs_by_rva (
-  pe_context_t pe_context, struct image_section_header** out, uint64_t rva);
-bool pe$is_image_x64 (pe_context_t pe_context);
-uint8_t pe$get_image_maxsize (pe_context_t pe_context);
-uint64_t pe$get_image_base (pe_context_t pe_context);
-uint64_t pe$rva_to_va (pe_context_t pe_context, uint64_t address);
-uint64_t pe$va_to_rva (pe_context_t pe_context, uint64_t address);
-int pe$read_maxint (uint64_t* into, pe_context_t pe_context);
-uint64_t pe$find_directory_fileoffs (pe_context_t pe_context, uint8_t index);
-uint32_t pe$get_pagesize (pe_context_t pe_context);
-size_t pe$get_ptrsize (pe_context_t pe_context);
+  pe_context_t, struct image_section_header** out, uint64_t rva);
+bool pe$is_image_x64 (pe_context_t);
+uint8_t pe$get_image_maxsize (pe_context_t);
+uint64_t pe$get_image_base (pe_context_t);
+uint64_t pe$rva_to_va (pe_context_t, uint64_t address);
+uint64_t pe$va_to_rva (pe_context_t, uint64_t address);
+int pe$read_maxint (uint64_t* into, pe_context_t);
+uint64_t pe$find_directory_fileoffs (pe_context_t, uint8_t index);
+struct image_section_header* pe$find_section_by_rva (
+  pe_context_t, uint64_t rva);
+uint32_t pe$get_pagesize (pe_context_t);
+size_t pe$get_ptrsize (pe_context_t);
 __attribute__ (( malloc(free, 1) ))
-uint8_t* pe$read_page_at (pe_context_t pe_context, uint64_t rva);
+uint8_t* pe$read_sized (pe_context_t, uint64_t rva, uint64_t size);
+uint8_t* pe$read_page_at (pe_context_t, uint64_t rva);

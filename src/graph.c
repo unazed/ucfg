@@ -12,7 +12,7 @@ struct graph_vertex
 struct _graph
 {
   map_t /* vertex-tag -> array[vertex-tag] */ map_vertex_edges;
-  array_t vertices;
+  array_t /* struct graph_vertex */ vertices;
   vertex_tag_t tag_counter;
 };
 
@@ -190,4 +190,15 @@ void*
 graph$metadata (graph_t graph, vertex_tag_t tag)
 {
   return get_vertex (graph, tag)->metadata;
+}
+
+bool
+graph$for_each_vertex (graph_t graph, iter_vertex_t callback, void* param)
+{
+  $array_for_each ($, graph->vertices, struct graph_vertex, vertex)
+  {
+    if (!callback ($.vertex->tag, $.vertex->metadata, param))
+      return true;
+  }
+  return false;
 }

@@ -43,14 +43,18 @@ __attribute__ (( malloc(array$free, 1) ))
 array_t array$from_existing (void* ptr, size_t n, size_t membsize);
 
 void* array$append (array_t, void* ptrmemb);
+void* array$append_rval (array_t, uintmax_t memb);
 void* array$insert (array_t, size_t idx, void* ptrmemb);
 void array$remove (array_t, size_t idx);
+void array$remove_rval (array_t, uintmax_t memb);
 void* array$at (array_t, size_t idx);
 void array$pop (array_t, void* into, size_t idx);
 size_t array$length (array_t);
 size_t array$capacity (array_t);
 bool array$is_empty (array_t);
+ssize_t array$find (array_t, void* ptrmemb);
+ssize_t array$find_rval (array_t, uintmax_t memb);
 bool array$contains (array_t, void* ptrmemb);
-bool array$contains_rval (array_t array, uint64_t memb);
+bool array$contains_rval (array_t array, uintmax_t memb);
 void array$concat (array_t, array_t other);
 void array$allocopts (array_t, struct array_allocopts opts);

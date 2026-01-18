@@ -164,6 +164,19 @@ array$append (array_t array, void* ptrmemb)
   return newmemb;
 }
 
+/* NB: `*_rval` functions won't work on little endian systems, need to create a 
+ *     tmp buffer and invert the byteorder
+ */
+
+void*
+array$append_rval (array_t array, uintmax_t memb)
+{
+  $strict_assert (
+    array->membsize_unaligned <= sizeof (memb),
+    "Member size too large to fit in rvalue");
+  return array$append (array, &memb);
+}
+
 void*
 array$insert (array_t array, size_t idx, void* ptrmemb)
 {
@@ -200,6 +213,35 @@ ret:
   maybe_downsize_array (array);
 }
 
+void
+array$remove_rval (array_t array, uintmax_t memb)
+{
+  auto idx = array$find_rval (array, memb);
+  if (idx == -1)
+    $abort ("tried to remove member which does not exist");
+  return array$remove (array, idx);
+}
+
+ssize_t
+array$find (array_t array, void* ptrmemb)
+{
+  $array_for_each ($, array, void*, memb)
+  {
+    if (!memcmp ($.memb, ptrmemb, array->membsize_unaligned))
+      return $.i;
+  }
+  return -1;
+}
+
+ssize_t
+array$find_rval (array_t array, uintmax_t memb)
+{
+  $strict_assert (
+    array->membsize_unaligned <= sizeof (memb),
+    "Member size too large to fit in rvalue");
+  return array$find (array, &memb);
+}
+
 void*
 array$at (array_t array, size_t idx)
 {
@@ -229,25 +271,18 @@ array$concat (array_t array, array_t other)
 }
 
 bool
-array$contains_rval (array_t array, uint64_t memb)
+array$contains_rval (array_t array, uintmax_t memb)
 {
-  $array_for_each ($, array, void*, comp)
-  {
-    if (*(uint64_t *)$.comp == memb)
-      return true;
-  }
-  return false;
+  $strict_assert (
+    array->membsize_unaligned <= sizeof (memb),
+    "Member size too large to fit in rvalue");
+  return array$contains (array, &memb);
 }
 
 bool
 array$contains (array_t array, void* ptrmemb)
 {
-  $array_for_each ($, array, void*, memb)
-  {
-    if (!memcmp ($.memb, ptrmemb, array->membsize_unaligned))
-      return true;
-  }
-  return false;
+  return array$find (array, ptrmemb) != -1;
 }
 
 size_t
