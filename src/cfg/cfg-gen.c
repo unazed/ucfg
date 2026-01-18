@@ -2,13 +2,15 @@
 
 #include <string.h>
 
-#include "cfg-gen.h"
-#include "cfg.h"
+#include "cfg/cfg-gen.h"
+#include "cfg/cfg-sim.h"
+#include "cfg/cfg.h"
 #include "graph.h"
 
 struct _cfg_gen_ctx
 {
   pe_context_t pe;
+  cfg_sim_ctx_t sim;
   cfg_t cfg;
   csh handle;
   vertex_tag_t fn_tag;
@@ -133,22 +135,18 @@ dispatch_jump_imm (
   return true;
 }
 
-static bool
+static array_t /* struct cs_insn */
 trace_insn_dataflow (
   cfg_gen_ctx_t ctx, vertex_tag_t block_tag, cs_insn* dep_insn)
 {
-  /* 1. grab instructions from current block
-   * 2. iterate them in reverse order from before `insn`
-   * 3. search for `mov/lea` on `dep_reg`
-   * 4. if found, exit
-   * 5. 
-   */
   size_t insn_count;
   auto insns = read_insns_at_block_before (
     ctx, &insn_count, block_tag, dep_insn->address);
+
   auto dep_regs = array$new (sizeof (enum x86_reg));
+  auto df_insns = array$new (sizeof (struct cs_insn));
   array$append_rval (dep_regs, dep_insn->detail->x86.operands[0].reg);
-  
+
   for (ssize_t i = insn_count - 1; i >= 0; --i)
   {
     auto insn = insns[i];
@@ -160,30 +158,42 @@ trace_insn_dataflow (
       continue;
     if (is_load_insn (&insn))
     {
-      $trace ("no longer tracking register: %s", cs_reg_name (ctx->handle, operands[0].reg));
+      $trace_debug (
+        "no longer tracking register: %s",
+        cs_reg_name (ctx->handle, operands[0].reg));
       array$remove_rval (dep_regs, operands[0].reg);
     }
     if ((op_count >= 2) && (operands[1].type == X86_OP_REG))
     {
-      $trace ("tracking register: %s", cs_reg_name (ctx->handle, operands[1].reg));
+      $trace_debug (
+        "tracking register: %s", cs_reg_name (ctx->handle, operands[1].reg));
       array$append_rval (dep_regs, operands[1].reg);
     }
-    $trace ("TRACE: %s %s", insn.mnemonic, insn.op_str);
+    $trace_debug ("\t%s %s", insn.mnemonic, insn.op_str);
+    array$insert (df_insns, 0, &insn);
   }
+
   if (!array$is_empty (dep_regs))
-    $trace ("still tracking %zu registers", array$length (dep_regs));
+  {
+    $trace_debug ("still tracking %zu registers", array$length (dep_regs));
+    $abort ("tracing beyond initial block unimplemented");
+  }
   else
-    $trace ("fully resolved dataflow");
-  return true;
+    $trace_debug ("fully resolved dataflow");
+
+  array$free (dep_regs);
+  cs_free (insns, insn_count);
+  return df_insns;
 }
 
 bool
 cfg_gen$recurse_branch_insns (
   cfg_gen_ctx_t ctx, cs_insn* branch_insn, vertex_tag_t pred)
 {
+  auto operands = branch_insn->detail->x86.operands;
   if (cs_insn_group (ctx->handle, branch_insn, X86_GRP_JUMP))
   {
-    switch (branch_insn->detail->x86.operands[0].type)
+    switch (operands[0].type)
     {
       case X86_OP_IMM:
         return dispatch_jump_imm (ctx, branch_insn, pred); 
@@ -196,7 +206,7 @@ cfg_gen$recurse_branch_insns (
   }
   else if (cs_insn_group (ctx->handle, branch_insn, X86_GRP_CALL))
   {
-    switch (branch_insn->detail->x86.operands[0].type)
+    switch (operands[0].type)
     {
       case X86_OP_IMM:
       {
@@ -215,8 +225,12 @@ cfg_gen$recurse_branch_insns (
       }
       case X86_OP_REG:
       {
-        auto dataflow = trace_insn_dataflow (ctx, pred, branch_insn);
-        (void)dataflow;
+        auto df_insns = trace_insn_dataflow (ctx, pred, branch_insn);
+        $trace ("found %zu dataflow instructions", array$length (df_insns));
+        auto success = cfg_sim$simulate_insns (ctx->sim, df_insns);
+        if (success)
+          $trace ("successfully simulated dataflow");
+        array$free (df_insns);
         $abort ("unimplemented call to register: %s", branch_insn->op_str);
         break;
       }
@@ -260,6 +274,7 @@ cfg_gen$recurse_function_block (
 void
 cfg_gen$free_context (cfg_gen_ctx_t ctx)
 {
+  cfg_sim$free (ctx->sim);
   $chk_free (ctx);
 }
 
@@ -270,5 +285,6 @@ cfg_gen$new_context (pe_context_t pe_context, cfg_t cfg, csh handle)
   ctx->pe = pe_context;
   ctx->cfg = cfg;
   ctx->handle = handle;
+  ctx->sim = cfg_sim$new_context (CS_ARCH_X86);
   return ctx;
 }

@@ -4,6 +4,7 @@
 
 #include "trace.h"
 
+#define $arraysize(array) (sizeof (array) / sizeof ((array)[0]))
 #define $ptrsize(ty) (sizeof (*(ty)(0)))
 #define $offset_between(ty, memb1, memb2) \
   offsetof (ty, memb2) - offsetof (ty, memb1)

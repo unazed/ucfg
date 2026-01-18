@@ -12,7 +12,8 @@ LDFLAGS = -lcapstone -largp
 CFLAGS ?= $(COMMON_CFLAGS) $(CFG_DEFS)
 
 OBJ = $(SOURCES:src/%.c=build/%.o)
-SOURCES = $(wildcard src/*.c) $(wildcard src/pe/*.c)
+SOURCES = $(wildcard src/*.c) $(wildcard src/pe/*.c) $(wildcard src/cfg/*.c) \
+					$(wildcard src/cfg/arch/*.c)
 
 ANALYZE_CFLAGS = --analyze -Xanalyzer -analyzer-output=html
 ANALYZE_OUT = analyze-reports

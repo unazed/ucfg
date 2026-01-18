@@ -1,8 +1,7 @@
-#include "cfg.h"
+#include "cfg/cfg.h"
 #include "graph.h"
 #include "bitmap.h"
 #include "array.h"
-#include <stdint.h>
 
 struct _cfg_basic_block
 {

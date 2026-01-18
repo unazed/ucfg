@@ -5,13 +5,13 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <errno.h>
 
-#include "errno.h"
 #include "pe/context.h"
 #include "pe/format.h"
-#include "cfg-gen.h"
+#include "cfg/cfg-gen.h"
+#include "cfg/cfg.h"
 #include "trace.h"
-#include "cfg.h"
 
 static char doc[] = "Control-flow graph generation for x86";
 static char args_doc[] = "FILE";

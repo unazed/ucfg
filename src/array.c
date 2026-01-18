@@ -189,8 +189,9 @@ array$insert (array_t array, size_t idx, void* ptrmemb)
   memmove (
     get_array_at_unchecked (array, idx + 1),
     newmemb,
-    array->membsize * (array->nmemb - idx + 1));
+    array->membsize * (array->nmemb - idx));
   memcpy (newmemb, ptrmemb, array->membsize_unaligned);
+  array->nmemb++;
   return newmemb;
 }
 

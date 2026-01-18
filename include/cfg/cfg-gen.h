@@ -3,7 +3,7 @@
 #include <capstone/capstone.h>
 
 #include "pe/context.h"
-#include "cfg.h"
+#include "cfg/cfg.h"
 
 typedef struct _cfg_gen_ctx *cfg_gen_ctx_t;
 
