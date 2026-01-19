@@ -15,25 +15,15 @@ OBJ = $(SOURCES:src/%.c=build/%.o)
 SOURCES = $(wildcard src/*.c) $(wildcard src/pe/*.c) $(wildcard src/cfg/*.c) \
 					$(wildcard src/cfg/arch/*.c)
 
-ANALYZE_CFLAGS = --analyze -Xanalyzer -analyzer-output=html
-ANALYZE_OUT = analyze-reports
+TARGET = ucfg
 
-all: build/test
-
-.PHONY: analyze
-analyze: $(SOURCES)
-	@mkdir -p analyze-reports
-	@for f in $(SOURCES); do \
-		echo "Analyzing $$f"; \
-		$(CC) $(CFLAGS) --analyze -Xanalyzer -analyzer-output=html \
-			-Xanalyzer -output-dir=analyze-reports $$f >/dev/null || exit $$?; \
-	done
+all: build/$(TARGET)
 
 build/%.o: src/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-build/test: $(OBJ)
+build/$(TARGET): $(OBJ)
 	$(CC) $(CFLAGS) -o $@ $(OBJ) -L$(LDLIBPATH) $(LDFLAGS)
 
 -include $(OBJ:.o=.d)
