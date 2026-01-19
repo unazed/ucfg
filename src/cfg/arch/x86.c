@@ -2,12 +2,7 @@
 #include <string.h>
 
 #include "cfg/arch/x86.h"
-
-#define REGMASK_LOWB  (0x00ff)
-#define REGMASK_HIGHB (0xff00)
-#define REGMASK_WORD  (0xffff)
-#define REGMASK_DWORD (0xffffffff)
-#define REGMASK_QWORD (0xffffffffffffffff)
+#include "capstone/x86.h"
 
 #define REG_RAX (0)
 #define REG_RBX (1)
@@ -25,6 +20,7 @@
 #define REG_R13 (13)
 #define REG_R14 (14)
 #define REG_R15 (15)
+#define REG_RIP (16)
 
 static uint64_t*
 get_regloc_mask (
@@ -32,7 +28,7 @@ get_regloc_mask (
 {
 #define $case_regloc_mask(_case, _mask, idx) \
   case _case: *mask = (_mask); return &state->gpregs[idx];
-
+  
   switch (reg)
   {
     $case_regloc_mask(X86_REG_AL, REGMASK_LOWB, REG_RAX);
@@ -119,6 +115,14 @@ get_regloc_mask (
     $case_regloc_mask(X86_REG_R15D, REGMASK_DWORD, REG_R15);
     $case_regloc_mask(X86_REG_R15, REGMASK_QWORD, REG_R15);
 
+    $case_regloc_mask(X86_REG_IP, REGMASK_WORD, REG_RIP);
+    $case_regloc_mask(X86_REG_EIP, REGMASK_DWORD, REG_RIP);
+    $case_regloc_mask(X86_REG_RIP, REGMASK_QWORD, REG_RIP);
+
+    case X86_REG_INVALID:
+      /* this might be valid in some cases? */
+      $abort ("tried to get location of invalid register");
+
     default:
       $abort ("unrecognised x86 register: %d", reg);
 #undef $case_regloc_mask
@@ -166,13 +170,18 @@ cfg_sim$x86$reset (void* _state)
 }
 
 uint64_t*
-cfg_sim$x86$get_reg (void* _state, uint16_t _reg)
+cfg_sim$x86$get_reg_indet (void* _state, uint64_t* mask, uint16_t _reg)
 {
   auto state = (struct cfg_sim_state_x86 *)_state;
   auto reg = (enum x86_reg)_reg;
+  return get_regloc_mask (state, reg, mask);
+}
 
-  uint64_t mask;
-  uint64_t* regloc = get_regloc_mask (state, reg, &mask);
+uint64_t*
+cfg_sim$x86$get_reg (void* _state, uint64_t* mask, uint16_t _reg)
+{
+  auto state = (struct cfg_sim_state_x86 *)_state;
+  auto regloc = cfg_sim$x86$get_reg_indet (_state, mask, _reg);
 
   if (!is_dirty_bit_set (state, regloc))
     return NULL;
@@ -198,4 +207,16 @@ cfg_sim$x86$set_reg (void* _state, uint16_t _reg, uint64_t val)
     *regloc = (*regloc & ~mask) | (val & mask);
 
   set_dirty_bit (state, regloc);
+}
+
+uint8_t
+cfg_sim$x86$get_reg_width (void* _state, uint16_t _reg)
+{
+  auto state = (struct cfg_sim_state_x86 *)_state;
+  auto reg = (enum x86_reg)_reg;
+
+  uint64_t mask;
+  (void)get_regloc_mask (state, reg, &mask);
+
+  return __builtin_popcountg (mask);
 }

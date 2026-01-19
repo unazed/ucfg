@@ -228,11 +228,20 @@ cfg_gen$recurse_branch_insns (
         auto df_insns = trace_insn_dataflow (ctx, pred, branch_insn);
         $trace ("found %zu dataflow instructions", array$length (df_insns));
         auto success = cfg_sim$simulate_insns (ctx->sim, df_insns);
-        if (success)
-          $trace ("successfully simulated dataflow");
         array$free (df_insns);
-        $abort ("unimplemented call to register: %s", branch_insn->op_str);
-        break;
+        if (!success)
+        {
+          $trace ("failed to simulate dataflow, possibly indeterminate");
+          return false;
+        }
+        uint64_t reg_mask;
+        auto reg_val = ctx->sim->fn.get_reg (
+          ctx->sim, &reg_mask, operands[0].reg);
+        $trace (
+          "simulated %s value: %" PRIx64,
+          branch_insn->op_str, *reg_val & reg_mask);
+        return cfg_gen$recurse_function_block (
+          ctx, ctx->fn_tag, *reg_val & reg_mask);
       }
       case X86_OP_INVALID:
         $abort ("unimplemented call type");
