@@ -28,4 +28,5 @@ void cfg_sim$x86$reset (void* state);
 uint64_t* cfg_sim$x86$get_reg (void* state, uint64_t* mask, uint16_t reg);
 uint64_t* cfg_sim$x86$get_reg_indet (void* state, uint64_t* mask, uint16_t reg);
 void cfg_sim$x86$set_reg (void* state, uint16_t reg, uint64_t val);
+void cfg_sim$x86$set_pc (void* state, uint64_t val);
 uint8_t cfg_sim$x86$get_reg_width (void* state, uint16_t reg);

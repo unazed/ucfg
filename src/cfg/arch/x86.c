@@ -209,6 +209,13 @@ cfg_sim$x86$set_reg (void* _state, uint16_t _reg, uint64_t val)
   set_dirty_bit (state, regloc);
 }
 
+void
+cfg_sim$x86$set_pc (void* _state, uint64_t val)
+{
+  auto state = (struct cfg_sim_state_x86 *)_state;
+  cfg_sim$x86$set_reg (state, X86_REG_RIP, val);
+}
+
 uint8_t
 cfg_sim$x86$get_reg_width (void* _state, uint16_t _reg)
 {

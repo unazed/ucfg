@@ -1,7 +1,8 @@
 #include <x86intrin.h>
 
-#include "cfg/cfg-sim.h"
 #include "capstone/x86.h"
+#include "cfg/insns/dispatch.h"
+#include "cfg/cfg-sim.h"
 #include "cfg/arch/x86.h"
 
 static void
@@ -17,6 +18,7 @@ init_state_fnptrs (cfg_sim_ctx_t sim_ctx, cs_arch arch)
         .get_reg = cfg_sim$x86$get_reg,
         .get_reg_indet = cfg_sim$x86$get_reg_indet,
         .set_reg = cfg_sim$x86$set_reg,
+        .set_pc = cfg_sim$x86$set_pc,
         .get_reg_width = cfg_sim$x86$get_reg_width
       };
       sim_ctx->state = sim_ctx->fn.new_state ();
@@ -46,167 +48,54 @@ cfg_sim$simulate_insns (cfg_sim_ctx_t sim_ctx, array_t insns)
 {
   $array_for_each($, insns, struct cs_insn, insn)
   {
-    sim_ctx->fn.set_reg (sim_ctx, X86_REG_RIP, $.insn->address + $.insn->size);
-    $trace ("(trace) %s %s", $.insn->mnemonic, $.insn->op_str);
-    auto operands = $.insn->detail->x86.operands;
-    switch ($.insn->id)
+    $trace_debug (
+      "(trace: %" PRIx64 ") %s %s",
+      $.insn->address, $.insn->mnemonic, $.insn->op_str);
+
+    sim_ctx->fn.set_pc (sim_ctx->state, $.insn->address + $.insn->size);
+
+    auto op_1 = &$.insn->detail->x86.operands[0];
+    auto op_2 = &$.insn->detail->x86.operands[1];
+    switch ($.insn->detail->x86.op_count)
     {
-      case X86_INS_MOV:
-      {
-        if (operands[1].type == X86_OP_IMM)
-          sim_ctx->fn.set_reg (sim_ctx, operands[0].reg, operands[1].imm);
-        else if (operands[1].type == X86_OP_REG)
-        {
-          uint64_t src_mask;
-          auto reg_src = sim_ctx->fn.get_reg (
-            sim_ctx, &src_mask, operands[1].reg);
-          if (reg_src == NULL)
-          {
-            $trace ("indeterminate mov source register");
-            return false;
-          }
-          sim_ctx->fn.set_reg (sim_ctx, operands[0].reg, *reg_src & src_mask);
-        }
-        else
-        {
-          $trace ("unsupported mov operand type");
-          return false;
-        }
-        break;
+    #define $ret_if_false(expr) \
+      { \
+        if (!(expr)) \
+        { \
+          $trace_debug ("dispatch failed: " #expr); \
+          return false; \
+        } \
+        break; \
       }
-      case X86_INS_ADD:
-      {
-        uint64_t dst_mask;
-        auto reg_dst = sim_ctx->fn.get_reg (
-          sim_ctx, &dst_mask, operands[0].reg);
-        if (reg_dst == NULL)
-        {
-          $trace ("indeterminate add destination register");
-          return false;
-        }
-        if (operands[1].type == X86_OP_IMM)
-        {
-          sim_ctx->fn.set_reg (
-            sim_ctx, operands[0].reg, (*reg_dst & dst_mask) + operands[1].imm);
-        }
-        else if (operands[1].type == X86_OP_REG)
-        {
-          uint64_t src_mask;
-          auto reg_src = sim_ctx->fn.get_reg (
-            sim_ctx, &src_mask, operands[1].reg);
-          if (reg_src == NULL)
-          {
-            $trace ("indeterminate add source register");
-            return false;
-          }
-          sim_ctx->fn.set_reg (
-            sim_ctx, operands[0].reg,
-            (*reg_dst & dst_mask) + (*reg_src & src_mask));
-        }
-        else
-        {
-          $trace ("unsupported add operand type");
-          return false;
-        }
-        break;
-      }
-      case X86_INS_ROL:
-      {
-        if (operands[1].type == X86_OP_IMM)
-        {
-          uint64_t mask;
-          auto reg = sim_ctx->fn.get_reg (sim_ctx, &mask, operands[0].reg);
-          if (reg == NULL)
-          {
-            $trace ("tried to access indeterminate register");
-            return false;
-          }
-          auto reg_width = sim_ctx->fn.get_reg_width (sim_ctx, operands[0].reg);
-          uint64_t val;
-          switch (reg_width)
-          {
-            case 8:
-              val = __rolb (*reg & mask, operands[1].imm);
-              break;
-            case 16:
-              val = __rolw (*reg & mask, operands[1].imm);
-              break;
-            case 32:
-              val = __rold (*reg & mask, operands[1].imm);
-              break;
-            case 64:
-              val = __rolq (*reg & mask, operands[1].imm);
-              break;
-            default:
-              __builtin_unreachable ();
-          }
-          sim_ctx->fn.set_reg (sim_ctx, operands[0].reg, val);
-          break;
-        }
-      }
-      case X86_INS_LEA:
-      {
-        auto sib = operands[1].mem;
-        uint64_t val = sib.disp;
 
-        if (sib.base != X86_REG_INVALID)
-        {
-          uint64_t mask_base;
-          auto reg_base = sim_ctx->fn.get_reg (sim_ctx, &mask_base, sib.base);
-          if (reg_base == NULL)
-          {
-            $trace ("indeterminate SIB base register");
-            return false;
-          }
-          val += *reg_base & mask_base;
-        }
+      case 0:
+        $ret_if_false(sim_dispatch$nullop (sim_ctx, $.insn));
 
-        if (sib.index != X86_REG_INVALID)
-        {
-          uint64_t mask_index;
-          auto reg_index = sim_ctx->fn.get_reg (
-            sim_ctx, &mask_index, sib.index);
-          if (reg_index == NULL)
-          {
-            $trace ("indeterminate SIB index register");
-            return false;
-          }
-          val += (*reg_index & mask_index) * sib.scale;
-        }
-        sim_ctx->fn.set_reg (sim_ctx, operands[0].reg, val);
+      case 1:
+        if (op_1->type == X86_OP_REG)
+          $ret_if_false(sim_dispatch$unop_reg (sim_ctx, $.insn));
+        if (op_1->type == X86_OP_MEM)
+          $ret_if_false(sim_dispatch$unop_mem (sim_ctx, $.insn));
+        $abort ("unhandled unop insn. operand type");
         break;
-      }
-      case X86_INS_MOVSXD:
-      {
-        auto src = operands[1];
-        uint64_t src_val;
-        
-        if (src.type == X86_OP_REG)
-        {
-          uint64_t mask_src;
-          auto reg_src = sim_ctx->fn.get_reg (sim_ctx, &mask_src, src.reg);
-          if (reg_src == NULL)
-          {
-            $trace ("indeterminate source register");
-            return false;
-          }
-          src_val = *reg_src & mask_src;
-        }
-        else
-        {
-          $trace ("invalid source operand type for MOVSXD");
-          return false;
-        }
-        
-        int32_t signed_val = (int32_t)(src_val & REGMASK_DWORD);
-        uint64_t extended_val = (uint64_t)(int64_t)signed_val;
-        
-        sim_ctx->fn.set_reg (sim_ctx, operands[0].reg, extended_val);
-        break;
-      }
+
+      case 2:
+        if ((op_1->type == X86_OP_REG) && (op_2->type == X86_OP_REG))
+          $ret_if_false(sim_dispatch$binop_reg_reg (sim_ctx, $.insn));
+        if ((op_1->type == X86_OP_REG) && (op_2->type == X86_OP_IMM))
+          $ret_if_false(sim_dispatch$binop_reg_imm (sim_ctx, $.insn));
+        if ((op_1->type == X86_OP_REG) && (op_2->type == X86_OP_MEM))
+          $ret_if_false(sim_dispatch$binop_reg_mem (sim_ctx, $.insn));
+        if ((op_1->type == X86_OP_MEM) && (op_2->type == X86_OP_REG))
+          $ret_if_false(sim_dispatch$binop_mem_reg (sim_ctx, $.insn));
+        if ((op_1->type == X86_OP_MEM) && (op_2->type == X86_OP_IMM))
+          $ret_if_false(sim_dispatch$binop_mem_imm (sim_ctx, $.insn));
+        $abort ("unhandled binop insn. operand types");
 
       default:
-        $abort ("unimplemented instruction: %s", $.insn->mnemonic);
+        $abort (
+          "unhandled insn. has %" PRIu8 " operands",
+          $.insn->detail->x86.op_count);
     }
   }
   return true;

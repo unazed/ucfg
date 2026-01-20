@@ -137,11 +137,14 @@ dispatch_jump_imm (
 
 static array_t /* struct cs_insn */
 trace_insn_dataflow (
-  cfg_gen_ctx_t ctx, vertex_tag_t block_tag, cs_insn* dep_insn)
+  cfg_gen_ctx_t ctx, vertex_tag_t block_tag, cs_insn* dep_insn,
+  cs_insn** out_insns, size_t* out_insn_count)
 {
   size_t insn_count;
   auto insns = read_insns_at_block_before (
     ctx, &insn_count, block_tag, dep_insn->address);
+  *out_insns = insns;
+  *out_insn_count = insn_count;
 
   auto dep_regs = array$new (sizeof (enum x86_reg));
   auto df_insns = array$new (sizeof (struct cs_insn));
@@ -182,7 +185,6 @@ trace_insn_dataflow (
     $trace_debug ("fully resolved dataflow");
 
   array$free (dep_regs);
-  cs_free (insns, insn_count);
   return df_insns;
 }
 
@@ -209,10 +211,8 @@ cfg_gen$recurse_branch_insns (
     switch (operands[0].type)
     {
       case X86_OP_IMM:
-      {
-        auto call_target = branch_insn->detail->x86.operands[0].imm;
-        return cfg_gen$recurse_function_block (ctx, ctx->fn_tag, call_target);
-      }
+        return cfg_gen$recurse_function_block (
+          ctx, ctx->fn_tag, operands[0].imm);
       case X86_OP_MEM:
       {
         auto operand = branch_insn->detail->x86.operands[0];
@@ -221,25 +221,34 @@ cfg_gen$recurse_branch_insns (
         auto iat_addr
           = branch_insn->address + branch_insn->size + operand.mem.disp;
         $trace ("jump to IAT entry at %" PRIx64, iat_addr);
+        /* TODO: validate `iat_addr` actually in IAT bounds */
         return false;
       }
       case X86_OP_REG:
       {
-        auto df_insns = trace_insn_dataflow (ctx, pred, branch_insn);
+        cs_insn* insns;
+        size_t insn_count;
+        auto df_insns = trace_insn_dataflow (
+          ctx, pred, branch_insn, &insns, &insn_count);
         $trace ("found %zu dataflow instructions", array$length (df_insns));
+
         auto success = cfg_sim$simulate_insns (ctx->sim, df_insns);
+        cs_free (insns, insn_count);
         array$free (df_insns);
+
         if (!success)
         {
           $trace ("failed to simulate dataflow, possibly indeterminate");
           return false;
         }
+
         uint64_t reg_mask;
         auto reg_val = ctx->sim->fn.get_reg (
-          ctx->sim, &reg_mask, operands[0].reg);
+          ctx->sim->state, &reg_mask, operands[0].reg);
         $trace (
           "simulated %s value: %" PRIx64,
           branch_insn->op_str, *reg_val & reg_mask);
+
         return cfg_gen$recurse_function_block (
           ctx, ctx->fn_tag, *reg_val & reg_mask);
       }

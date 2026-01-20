@@ -13,7 +13,7 @@ CFLAGS ?= $(COMMON_CFLAGS) $(CFG_DEFS)
 
 OBJ = $(SOURCES:src/%.c=build/%.o)
 SOURCES = $(wildcard src/*.c) $(wildcard src/pe/*.c) $(wildcard src/cfg/*.c) \
-					$(wildcard src/cfg/arch/*.c)
+					$(wildcard src/cfg/arch/*.c) $(wildcard src/cfg/insns/*.c)
 
 TARGET = ucfg
 

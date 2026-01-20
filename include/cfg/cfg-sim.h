@@ -21,6 +21,7 @@ struct cfg_sim_ctx_fnptrs
    */
   uint64_t* (*get_reg_indet)(void* state, uint64_t* mask, uint16_t reg);
   void (*set_reg)(void* state, uint16_t reg, uint64_t val);
+  void (*set_pc)(void* state, uint64_t val);
   uint8_t (*get_reg_width)(void* state, uint16_t reg);
 };
 
