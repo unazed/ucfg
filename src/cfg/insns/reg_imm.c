@@ -14,6 +14,8 @@ add_reg_imm (cfg_sim_ctx_t sim_ctx, uint16_t reg, uint64_t imm)
 {
   $get_regloc_chk(sim_ctx, reg, regloc, regmask);
   sim_ctx->fn.set_reg (sim_ctx->state, reg, (*regloc + imm) & regmask);
+  sim_dispatch$update_flags__arith (
+    sim_ctx, reg, *regloc & regmask, imm & regmask, false);
   return true;
 }
 
@@ -22,8 +24,9 @@ rol_reg_imm (cfg_sim_ctx_t sim_ctx, uint16_t reg, uint64_t imm)
 {
   $get_regloc_chk(sim_ctx, reg, regloc, regmask);
   auto reg_width = sim_ctx->fn.get_reg_width (sim_ctx->state, reg);
-  sim_ctx->fn.set_reg (
-    sim_ctx->state, reg, __rolg (*regloc & regmask, imm, reg_width));
+  uint64_t shifted = __rolg (*regloc & regmask, imm, reg_width);
+  sim_ctx->fn.set_reg (sim_ctx->state, reg, shifted);
+  sim_dispatch$update_flags__rot (sim_ctx, imm, shifted, reg_width);
   return true;
 }
 
@@ -32,8 +35,9 @@ ror_reg_imm (cfg_sim_ctx_t sim_ctx, uint16_t reg, uint64_t imm)
 {
   $get_regloc_chk(sim_ctx, reg, regloc, regmask);
   auto reg_width = sim_ctx->fn.get_reg_width (sim_ctx->state, reg);
-  sim_ctx->fn.set_reg (
-    sim_ctx->state, reg, __rorg (*regloc & regmask, imm, reg_width));
+  uint64_t shifted = __rorg (*regloc & regmask, imm, reg_width);
+  sim_ctx->fn.set_reg (sim_ctx->state, reg, shifted);
+  sim_dispatch$update_flags__rot (sim_ctx, imm, shifted, reg_width);
   return true;
 }
 

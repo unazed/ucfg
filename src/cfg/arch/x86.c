@@ -227,3 +227,20 @@ cfg_sim$x86$get_reg_width (void* _state, uint16_t _reg)
 
   return __builtin_popcountg (mask);
 }
+
+uint64_t
+cfg_sim$x86$get_flags (void* _state)
+{
+  /* N.B.: the flags are already in correct order for x86, but will need to be
+   *       restructured for other architectures; the `set_flag`/`clear_flag`
+   *       functions should be architecture-agnostic, but `get_flags` should
+   *       return a proper `eflags` register.
+   */
+  return ((struct cfg_sim_state_x86 *)_state)->flags;
+}
+
+void
+cfg_sim$x86$set_flag (void* _state, uint64_t mask, bool val)
+{
+  ((struct cfg_sim_state_x86 *)_state)->flags |= val << mask;
+}

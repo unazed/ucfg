@@ -17,9 +17,11 @@ init_state_fnptrs (cfg_sim_ctx_t sim_ctx, cs_arch arch)
         .reset = cfg_sim$x86$reset,
         .get_reg = cfg_sim$x86$get_reg,
         .get_reg_indet = cfg_sim$x86$get_reg_indet,
+        .get_reg_width = cfg_sim$x86$get_reg_width,
+        .get_flags = cfg_sim$x86$get_flags,
         .set_reg = cfg_sim$x86$set_reg,
         .set_pc = cfg_sim$x86$set_pc,
-        .get_reg_width = cfg_sim$x86$get_reg_width
+        .set_flag = cfg_sim$x86$set_flag,
       };
       sim_ctx->state = sim_ctx->fn.new_state ();
       break;
@@ -46,8 +48,12 @@ cfg_sim$free (cfg_sim_ctx_t sim_ctx)
 bool
 cfg_sim$simulate_insns (cfg_sim_ctx_t sim_ctx, array_t insns)
 {
+  sim_ctx->fn.reset (sim_ctx->state);
   $array_for_each($, insns, struct cs_insn, insn)
   {
+    if ($.insn->id == X86_INS_INVALID)
+      $abort ("tried to simulate invalid instruction");
+    
     $trace_debug (
       "(trace: %" PRIx64 ") %s %s",
       $.insn->address, $.insn->mnemonic, $.insn->op_str);
@@ -94,8 +100,8 @@ cfg_sim$simulate_insns (cfg_sim_ctx_t sim_ctx, array_t insns)
 
       default:
         $abort (
-          "unhandled insn. has %" PRIu8 " operands",
-          $.insn->detail->x86.op_count);
+          "unhandled insn. %s has %" PRIu8 " operands",
+          $.insn->mnemonic, $.insn->detail->x86.op_count);
     }
   }
   return true;

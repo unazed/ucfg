@@ -5,6 +5,16 @@
 #include "cfg/cfg.h"
 #include "array.h"
 
+#define EFLAGS_CF (1ull << 0)
+#define EFLAGS_PF (1ull << 2)
+#define EFLAGS_AF (1ull << 4)
+#define EFLAGS_ZF (1ull << 6)
+#define EFLAGS_SF (1ull << 7)
+#define EFLAGS_TF (1ull << 8)
+#define EFLAGS_IF (1ull << 9)
+#define EFLAGS_DF (1ull << 10)
+#define EFLAGS_OF (1ull << 11)
+
 struct cfg_sim_ctx_fnptrs
 {
   void* (*new_state)(void);
@@ -20,9 +30,12 @@ struct cfg_sim_ctx_fnptrs
    *                the register ID is invalid
    */
   uint64_t* (*get_reg_indet)(void* state, uint64_t* mask, uint16_t reg);
+
+  uint8_t (*get_reg_width)(void* state, uint16_t reg);
+  uint64_t (*get_flags)(void* state);
   void (*set_reg)(void* state, uint16_t reg, uint64_t val);
   void (*set_pc)(void* state, uint64_t val);
-  uint8_t (*get_reg_width)(void* state, uint16_t reg);
+  void (*set_flag)(void* state, uint64_t mask, bool to);
 };
 
 struct _cfg_sim_ctx
