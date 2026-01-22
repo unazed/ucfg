@@ -2,6 +2,8 @@
 #include "graph.h"
 #include "bitmap.h"
 #include "array.h"
+#include "stack.h"
+#include <stdint.h>
 
 struct _cfg_basic_block
 {
@@ -14,6 +16,7 @@ struct _cfg_function_block
 {
   vertex_tag_t entry_block;
   graph_t basic_blocks;
+  uint64_t sp_offset;
 };
 
 struct _cfg
@@ -21,6 +24,7 @@ struct _cfg
   graph_t functions;
   bitmap_t address_bitmap;
   uint64_t image_base;
+  stack_t stack;
 };
 
 static struct _cfg_function_block*
@@ -57,12 +61,16 @@ cfg$new (uint64_t image_base, uint64_t executable_size)
   cfg->functions = graph$new ();
   cfg->address_bitmap = bitmap$new (executable_size);
   cfg->image_base = image_base;
+  cfg->stack = stack$new ();
   return cfg;
 }
 
 void
 cfg$free (cfg_t cfg)
 {
+  graph$free (cfg->functions);
+  bitmap$free (cfg->address_bitmap);
+  stack$free (cfg->stack);
   $chk_free (cfg);
 }
 
@@ -73,6 +81,7 @@ cfg$add_function_block (cfg_t cfg, uint64_t address)
   auto metadata = $chk_allocty (struct _cfg_function_block*);
   metadata->basic_blocks = graph$new ();
   auto tag = graph$add_tagged (cfg->functions, address, metadata);
+  metadata->entry_block = tag;
   return tag;
 }
 
@@ -84,6 +93,7 @@ cfg$add_function_block_succ (cfg_t cfg, vertex_tag_t fn_tag, uint64_t address)
   metadata->basic_blocks = graph$new ();
   auto new_tag = graph$add_tagged (cfg->functions, address, metadata);
   digraph$connect (cfg->functions, fn_tag, new_tag);
+  metadata->entry_block = new_tag;
   return new_tag;
 }
 
@@ -114,6 +124,14 @@ cfg$add_basic_block_succ (
 }
 
 void
+cfg$set_function_block_sp_offset (
+  cfg_t cfg, vertex_tag_t fn_tag, uint64_t offset)
+{
+  auto fn_meta = get_fn_metadata (cfg, fn_tag);
+  fn_meta->sp_offset = offset;
+}
+
+void
 cfg$set_basic_block_end (
   cfg_t cfg, vertex_tag_t fn_tag, vertex_tag_t basic_tag, uint64_t address)
 {
@@ -140,6 +158,12 @@ iter_get_basic_block (vertex_tag_t basic_tag, void* metadata, void* param)
     return false;
   }
   return true;
+}
+
+vertex_tag_t
+cfg$get_entry_block (cfg_t cfg, vertex_tag_t fn_tag)
+{
+  return get_fn_metadata (cfg, fn_tag)->entry_block;
 }
 
 vertex_tag_t
@@ -215,4 +239,18 @@ bool
 cfg$is_address_visited (cfg_t cfg, uint64_t address)
 {
   return bitmap$test (cfg->address_bitmap, address);
+}
+
+array_t
+cfg$get_preds (cfg_t cfg, vertex_tag_t fn_tag, vertex_tag_t basic_tag)
+{
+  return digraph$get_ingress (
+    get_fn_metadata (cfg, fn_tag)->basic_blocks, basic_tag);
+}
+
+array_t
+cfg$get_succs (cfg_t cfg, vertex_tag_t fn_tag, vertex_tag_t basic_tag)
+{
+  return digraph$get_egress (
+    get_fn_metadata (cfg, fn_tag)->basic_blocks, basic_tag);
 }

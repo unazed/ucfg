@@ -37,11 +37,21 @@ is_load_insn (cs_insn* insn)
 }
 
 static cs_insn*
-read_insns_at_block (cfg_gen_ctx_t ctx, size_t* insn_count, vertex_tag_t tag)
+read_insns_at_block (
+  cfg_gen_ctx_t ctx, size_t* insn_count, vertex_tag_t basic_tag)
 {
-  auto block_size = cfg$get_basic_block_size (ctx->cfg, ctx->fn_tag, tag);
-  auto block_rva = cfg$get_basic_block_rva (ctx->cfg, ctx->fn_tag, tag);
-  auto insn_raw = pe$read_sized (ctx->pe, block_size, block_size);
+  auto block_size = cfg$get_basic_block_size (
+    ctx->cfg, ctx->fn_tag, basic_tag);
+  auto block_rva = cfg$get_basic_block_rva (
+    ctx->cfg, ctx->fn_tag, basic_tag);
+  auto insn_raw = pe$read_sized (ctx->pe, block_rva, block_size);
+  if (insn_raw == NULL)
+  {
+    $trace (
+      "failed to read block at %" PRIx64 " (%" PRIu64 " bytes)",
+      block_rva, block_size);
+    return NULL;
+  }
   cs_insn* insns;
   *insn_count = cs_disasm (
     ctx->handle, insn_raw, block_size, block_rva, 0, &insns);
@@ -133,7 +143,7 @@ trace_reg_dataflow (
 
   array$append_rval (tracked_regs, dep_insn->detail->x86.operands[0].reg);
 
-  $trace ("BEGIN TRACING");
+  $trace ("BEGIN TRACING:");
   for (ssize_t i = insn_count - 1; i >= 0; --i)
   {
     auto insn = &insns[i];
@@ -246,6 +256,44 @@ find_next_branch (cfg_gen_ctx_t ctx, cs_insn** ptrinsns, size_t insn_count)
   $abort (
     "failed to find branch in several pages, maybe we are disassembling "
     "non-executable data?");
+}
+
+static bool
+determine_sp_offset (cfg_gen_ctx_t ctx, uint64_t* sp_offset)
+{
+  size_t insn_count;
+  auto entry_insns = read_insns_at_block(
+    ctx, &insn_count, cfg$get_entry_block (ctx->cfg, ctx->fn_tag));
+
+  for (size_t i = 0; i < insn_count; ++i)
+  {
+    auto insn = &entry_insns[i];
+    auto operands = insn->detail->x86.operands;
+    if ((insn->id != X86_INS_SUB) || (operands[0].type != X86_OP_REG))
+      continue;
+    switch (operands[0].reg)
+    {
+      case X86_REG_SP:
+      case X86_REG_ESP:
+      case X86_REG_RSP:
+        break;
+      default:
+        continue;
+    }
+
+    switch (operands[1].type)
+    {
+      case X86_OP_IMM:
+        *sp_offset = operands[1].imm;
+        $trace ("determined sp-offset for function: -%" PRIx64, *sp_offset);
+        return true;
+      default:
+        $trace_err ("indeterminate sp-offset for function block");
+        return false;
+    }
+  }
+
+  return false;
 }
 
 static bool
@@ -433,7 +481,7 @@ cfg_gen$recurse_function_block (
   else
     fn_tag = cfg$add_function_block (ctx->cfg, block_address);
   ctx->fn_tag = fn_tag;
-  auto entry_tag = cfg$add_basic_block (ctx->cfg, fn_tag, block_address);
+  auto entry_tag = cfg$add_basic_block (ctx->cfg, ctx->fn_tag, block_address);
 
   size_t insn_count;
   cs_insn *insns = read_insns_at (ctx, &insn_count, block_address);
@@ -441,6 +489,16 @@ cfg_gen$recurse_function_block (
   cfg$set_basic_block_end (
     ctx->cfg, fn_tag, entry_tag,
     branch_insn->address + branch_insn->size);
+  $trace (
+    "new function block (size %" PRIu64" bytes): %" PRIx64,
+    cfg$get_basic_block_size (ctx->cfg, ctx->fn_tag, entry_tag), ctx->fn_tag);
+
+  uint64_t sp_offset;
+  if (!determine_sp_offset (ctx, &sp_offset))
+    $trace_err ("couldn't find function block sp-offset");
+  else
+    cfg$set_function_block_sp_offset (ctx->cfg, fn_tag, sp_offset);
+
   auto success = cfg_gen$recurse_branch_insns (ctx, branch_insn, entry_tag);
   cs_free (insns, insn_count);
   return success;
