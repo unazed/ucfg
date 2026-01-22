@@ -99,6 +99,24 @@ get_insn_flags (cs_insn* insn)
 #undef $test_set
 }
 
+static inline bool
+is_equal_ops (struct cs_x86_op* dst_loc, struct cs_x86_op* src_loc)
+{
+  if (dst_loc->type != src_loc->type)
+    return false;
+
+  switch (dst_loc->type)
+  {
+    case X86_OP_MEM:
+      return !memcmp (
+        &dst_loc->mem, &src_loc->mem, sizeof (struct x86_op_mem));
+    case X86_OP_REG:
+      return dst_loc->reg == src_loc->reg;
+    default:
+      __builtin_unimplemented ();
+  }
+}
+
 static array_t /* struct cs_insn */
 trace_reg_dataflow (
   cfg_gen_ctx_t ctx, vertex_tag_t block_tag, cs_insn* dep_insn,
@@ -107,50 +125,53 @@ trace_reg_dataflow (
   size_t insn_count;
   auto insns = read_insns_at_block_before (
     ctx, &insn_count, block_tag, dep_insn->address);
-
-  auto dep_regs = array$new (sizeof (enum x86_reg));
   auto df_insns = array$new (sizeof (struct cs_insn));
-  array$append_rval (dep_regs, dep_insn->detail->x86.operands[0].reg);
 
+  /* store ptrs to operands so we can use `array`'s `*_rval` functions */
+  array_t tracked_regs = array$new (sizeof (enum x86_reg)),
+          tracked_mem = array$new (sizeof (struct x86_op_mem*));
+
+  array$append_rval (tracked_regs, dep_insn->detail->x86.operands[0].reg);
+
+  $trace ("BEGIN TRACING");
   for (ssize_t i = insn_count - 1; i >= 0; --i)
   {
     auto insn = &insns[i];
-    auto operands = insn->detail->x86.operands;
-    auto op_count = insn->detail->x86.op_count;
-    if (!op_count
-        || (operands[0].type != X86_OP_REG)
-        || !array$contains_rval (dep_regs, operands[0].reg))
-      continue;
-    if (is_load_insn (insn))
-    {
-      $trace_debug (
-        "no longer tracking register: %s",
-        cs_reg_name (ctx->handle, operands[0].reg));
-      array$remove_rval (dep_regs, operands[0].reg);
-    }
-    if ((op_count >= 2) && (operands[1].type == X86_OP_REG))
-    {
-      $trace_debug (
-        "tracking register: %s", cs_reg_name (ctx->handle, operands[1].reg));
-      array$append_rval (dep_regs, operands[1].reg);
-    }
-    $trace ("\t%s %s", insn->mnemonic, insn->op_str);
-    array$insert (df_insns, 0, insn);
-  }
 
-  if (!array$is_empty (dep_regs))
-  {
-    $trace_debug ("still tracking %zu registers", array$length (dep_regs));
-    array$free (df_insns);
-    return NULL;
+    uint8_t regs_write_count, regs_read_count;
+    cs_regs regs_write, regs_read;
+    if (cs_regs_access (
+        ctx->handle, insn, regs_read, &regs_read_count, regs_write,
+        &regs_write_count) != CS_ERR_OK)
+    {
+      $trace_err ("cs_regs_access failed");
+      continue;
+    }
+
+    for (size_t i_wreg = 0; i_wreg < regs_write_count; ++i_wreg)
+    {
+      auto wreg = regs_write[i_wreg];
+      if (!array$contains_rval (tracked_regs, wreg))
+        continue;
+      $trace_debug (
+        "no longer tracking register: %s", cs_reg_name (ctx->handle, wreg));
+      array$remove_rval (tracked_regs, wreg);
+      for (size_t i_rreg = 0; i_rreg < regs_read_count; ++i_rreg)
+      {
+        auto rreg = regs_read[i_rreg];
+        $trace_debug ("tracking register: %s", cs_reg_name (ctx->handle, rreg));
+        array$append_rval (tracked_regs, rreg);
+      }
+      array$insert (df_insns, 0, insn);
+      $trace ("\t%s %s", insn->mnemonic, insn->op_str);
+    }
   }
-  else
-    $trace_debug ("fully resolved register dataflow");
 
   *out_insns = insns;
   *out_insn_count = insn_count;
 
-  array$free (dep_regs);
+  array$free (tracked_regs);
+  array$free (tracked_mem);
   return df_insns;
 }
 
@@ -245,15 +266,12 @@ dispatch_jump_imm (
       ctx, pred, branch_insn, &mod_eflags, &insns, &insn_count);
 
     jmp_targets[1] = branch_insn->address + branch_insn->size;
-    if (df_flags == NULL)
+    if ((df_flags == NULL) || array$is_empty (df_flags))
     {
       $trace ("branch is indeterminate, continuing...");
       goto failed_df;
     }
-
     $trace ("found %zu flag dataflow instructions", array$length (df_flags));
-
-    $trace ("1st insn: %s", ((struct cs_insn*)array$at (df_flags, 0))->mnemonic);
 
     if (cfg_sim$simulate_insns (ctx->sim, df_flags))
     {
@@ -374,7 +392,7 @@ cfg_gen$recurse_branch_insns (
         cs_free (insns, insn_count);
         array$free (df_insns);
 
-        if (!success)
+        if (!success || array$is_empty (df_insns))
         {
           $trace ("failed to simulate dataflow, possibly indeterminate");
           return false;
