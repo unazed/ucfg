@@ -8,6 +8,7 @@ void bitmap$free (bitmap_t);
 
 __attribute__ (( malloc(bitmap$free, 1) ))
 bitmap_t bitmap$new (size_t range);
+
 void bitmap$set (bitmap_t, size_t idx);
 void bitmap$set_range (bitmap_t, size_t start, size_t end);
 bool bitmap$test (bitmap_t, size_t idx);

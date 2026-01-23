@@ -16,6 +16,7 @@ struct _cfg_function_block
 {
   vertex_tag_t entry_block;
   graph_t basic_blocks;
+  uint8_t* active_stack_frame;
   uint64_t sp_offset;
 };
 
@@ -24,7 +25,7 @@ struct _cfg
   graph_t functions;
   bitmap_t address_bitmap;
   uint64_t image_base;
-  stack_t stack;
+  stack_t stack_frames;
 };
 
 static struct _cfg_function_block*
@@ -61,7 +62,7 @@ cfg$new (uint64_t image_base, uint64_t executable_size)
   cfg->functions = graph$new ();
   cfg->address_bitmap = bitmap$new (executable_size);
   cfg->image_base = image_base;
-  cfg->stack = stack$new ();
+  cfg->stack_frames = stack$new ();
   return cfg;
 }
 
@@ -70,7 +71,7 @@ cfg$free (cfg_t cfg)
 {
   graph$free (cfg->functions);
   bitmap$free (cfg->address_bitmap);
-  stack$free (cfg->stack);
+  stack$free (cfg->stack_frames);
   $chk_free (cfg);
 }
 
@@ -253,4 +254,30 @@ cfg$get_succs (cfg_t cfg, vertex_tag_t fn_tag, vertex_tag_t basic_tag)
 {
   return digraph$get_egress (
     get_fn_metadata (cfg, fn_tag)->basic_blocks, basic_tag);
+}
+
+uint8_t*
+cfg$new_stack_frame (cfg_t cfg, vertex_tag_t fn_tag)
+{
+  auto fn_meta = get_fn_metadata (cfg, fn_tag);
+  if (!fn_meta->sp_offset)
+    return NULL;
+  if (fn_meta->active_stack_frame != NULL)
+    return fn_meta->active_stack_frame;
+  fn_meta->active_stack_frame = stack$reserve (
+    cfg->stack_frames, fn_meta->sp_offset);
+  return fn_meta->active_stack_frame;
+}
+
+void
+cfg$free_stack_frame (cfg_t cfg, vertex_tag_t fn_tag)
+{
+  auto fn_meta = get_fn_metadata (cfg, fn_tag);
+  if (fn_meta->active_stack_frame == NULL)
+    $abort ("tried to release non-existent stack frame");
+  $strict_assert (
+    fn_meta->sp_offset != 0,
+    "Function has active stack frame, but invalid sp-offset");
+  stack$unreserve (cfg->stack_frames, fn_meta->sp_offset);
+  fn_meta->active_stack_frame = NULL;
 }

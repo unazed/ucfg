@@ -5,6 +5,8 @@
 #include "pe/context.h"
 #include "cfg/cfg.h"
 
+#define MAX_DF_BLOCK_DEPTH (16)
+
 typedef struct _cfg_gen_ctx *cfg_gen_ctx_t;
 
 void cfg_gen$free_context (cfg_gen_ctx_t);

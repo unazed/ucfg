@@ -7,9 +7,9 @@
 
 struct _stack
 {
-  /* top still grows upwards, otherwise reallocation is inefficient */
   uint8_t *base, *top;
   size_t nmemb, capacity;
+  size_t last_commit_size;
   struct
   {
     size_t alloc_increment;
@@ -19,7 +19,7 @@ struct _stack
 void
 stack$free (stack_t stack)
 {
-
+  $chk_free (stack->base);
 }
 
 stack_t
@@ -65,10 +65,6 @@ maybe_downsize_stack (stack_t stack)
 {
   size_t reserved_size = get_uncommitted_size (stack),
          stack_size = get_stack_size (stack);
-  /* 4+512 byte membs in 1024 capacity stack, pop, then 1024 - 4 > 512 inc
-   * so, round 4 up to next increment to 512
-   * if only 511+2, pop 1, 512 >= 512, 
-   */ 
   if (reserved_size <= stack->opts.alloc_increment)
     return;
   
@@ -77,6 +73,23 @@ maybe_downsize_stack (stack_t stack)
   $trace_debug (
     "downsized stack from %zu bytes to %zu", stack->capacity, new_capacity);
   stack->capacity = new_capacity;
+}
+
+static void
+validate_stack_removal (stack_t stack, size_t size)
+{
+  if (stack->last_commit_size && (size != stack->last_commit_size))
+    $abort (
+      "last stack commit was %zu bytes, trying to decommit %zu",
+      stack->last_commit_size, size);
+  $strict_assert (stack->nmemb > 0, "Tried to decommit from an empty stack");
+  $strict_assert (
+    (size <= stack->capacity) && (size <= get_stack_size (stack)),
+    "Tried to decommit more bytes than allocated from the stack");
+  if (stack->nmemb == 1)
+    $strict_assert (
+      size == get_stack_size (stack),
+      "Decommitting from stack would leave dangling data");
 }
 
 void
@@ -89,18 +102,38 @@ stack$push (stack_t stack, void* memb, size_t membsize)
   memcpy (stack->top, memb, membsize);
   $trace_debug ("pushed stack member (size %zu bytes)", membsize);
   stack->top += membsize;
+  stack->last_commit_size = membsize;
   stack->nmemb++;
 }
 
 void
 stack$pop (stack_t stack, void* dest, size_t membsize)
 {
-  $strict_assert (stack->nmemb > 0, "Tried to pop from empty stack");
-  $strict_assert (
-    (membsize <= stack->capacity) && (membsize <= get_stack_size (stack)),
-    "Tried to pop more bytes than allocated from stack");
+  validate_stack_removal (stack, membsize);
   stack->top -= membsize;
   memcpy (dest, stack->top, membsize);
   $trace_debug ("popped stack member (size %zu bytes)", membsize);
+  stack->last_commit_size = 0;
+  stack->nmemb--;
+  maybe_downsize_stack (stack);
+}
+
+uint8_t*
+stack$reserve (stack_t stack, size_t size)
+{
+  maybe_extend_stack (stack, size);
+  auto ptr = stack->top;
+  stack->top += size;
+  stack->last_commit_size = size;
+  stack->nmemb++;
+  return ptr;
+}
+
+void
+stack$unreserve (stack_t stack, size_t size)
+{
+  validate_stack_removal (stack, size);
+  stack->top -= size;
+  stack->last_commit_size = 0;
   stack->nmemb--;
 }

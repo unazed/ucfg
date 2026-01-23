@@ -17,6 +17,15 @@ struct bitmap_index
   size_t offset;
 };
 
+static struct bitmap_index
+get_bitmap_index (bitmap_t bitmap, size_t idx)
+{
+  return (struct bitmap_index){
+    .idx = idx / (8 * sizeof (*bitmap->array)),
+    .offset = idx % (8 * sizeof (*bitmap->array))
+  };
+}
+
 bitmap_t
 bitmap$new (size_t range)
 {
@@ -26,15 +35,6 @@ bitmap$new (size_t range)
   bitmap->size = range;
   $trace_debug ("allocated bitmap with range %zu", range);
   return bitmap;
-}
-
-static struct bitmap_index
-get_bitmap_index (bitmap_t bitmap, size_t idx)
-{
-  return (struct bitmap_index){
-    .idx = idx / (8 * sizeof (*bitmap->array)),
-    .offset = idx % (8 * sizeof (*bitmap->array))
-  };
 }
 
 void

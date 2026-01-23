@@ -46,9 +46,11 @@ cfg_sim$free (cfg_sim_ctx_t sim_ctx)
 }
 
 bool
-cfg_sim$simulate_insns (cfg_sim_ctx_t sim_ctx, array_t insns)
+cfg_sim$simulate_insns (
+  cfg_sim_ctx_t sim_ctx, vertex_tag_t fn_tag, array_t insns)
 {
   sim_ctx->fn.reset (sim_ctx->state);
+  sim_ctx->fn_tag = fn_tag;
   $array_for_each($, insns, struct cs_insn, insn)
   {
     if ($.insn->id == X86_INS_INVALID)

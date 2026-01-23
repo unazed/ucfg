@@ -11,7 +11,10 @@ static const struct array_allocopts g_default_allocopts = {
   .alloc_nmemb_increment  = 4,
   .trim_nmemb_threshold   = 8,
   .min_nmemb              = 0,
-  .max_nmemb              = 0
+  .max_nmemb              = 0,
+  .hook_memcpy            = memcpy,
+  .hook_memmove           = memmove,
+  .hook_free              = NULL
 };
 
 struct _array
@@ -146,19 +149,28 @@ array$from_existing (void* ptr, size_t n, size_t membsize)
 }
 
 void
-array$free (array_t array)
+array$_default_free_hook (void* ptr)
 {
-  $trace_debug ("freeing array");
+  array_t array = ptr;
   if (array != NULL)
     $chk_free (array->raw);
   $chk_free (array);
+}
+
+void
+array$free (array_t array)
+{
+  $trace_debug ("freeing array");
+  if (array->allocopts.hook_free != NULL)
+    array->allocopts.hook_free (array);
+  array$_default_free_hook (array);
 }
 
 void*
 array$append (array_t array, void* ptrmemb)
 {
   $trace_debug ("appending member to array: %p", array);
-  auto newmemb = memcpy (
+  auto newmemb = array->allocopts.hook_memcpy (
     maybe_extend_array (array), ptrmemb, array->membsize_unaligned);
   array->nmemb++;
   return newmemb;
@@ -186,11 +198,11 @@ array$insert (array_t array, size_t idx, void* ptrmemb)
   maybe_extend_array (array);
   $trace_debug ("inserting new member at index %zu: %p", idx, ptrmemb);
   auto newmemb = get_array_at_unchecked (array, idx);
-  memmove (
+  array->allocopts.hook_memmove (
     get_array_at_unchecked (array, idx + 1),
     newmemb,
     array->membsize * (array->nmemb - idx));
-  memcpy (newmemb, ptrmemb, array->membsize_unaligned);
+  array->allocopts.hook_memcpy (newmemb, ptrmemb, array->membsize_unaligned);
   array->nmemb++;
   return newmemb;
 }
@@ -205,7 +217,7 @@ array$remove (array_t array, size_t idx)
     memset (get_array_at_unchecked (array, idx), 0, array->membsize);
     goto ret;
   }
-  memmove (
+  array->allocopts.hook_memmove (
     get_array_at_unchecked(array, idx),
     get_array_at_unchecked(array, idx + 1),
     array->membsize * (array->nmemb - idx + 1));
@@ -255,7 +267,7 @@ array$pop (array_t array, void* into, size_t idx)
 {
   check_index_bounds (array, idx);
   auto memb = get_array_at_unchecked (array, idx);
-  memcpy (into, memb, array->membsize_unaligned);
+  array->allocopts.hook_memcpy (into, memb, array->membsize_unaligned);
   array$remove (array, idx);
 }
 
@@ -334,4 +346,32 @@ array$allocopts (array_t array, struct array_allocopts opts)
     array->raw = $chk_realloc (array->raw, min_capacity);
     array->capacity = min_capacity;
   }
+}
+
+void
+array$set_copy_hooks (
+  array_t array, array_memcpy_fn_t hook_memcpy, array_memmove_fn_t hook_memmove)
+{
+  if (hook_memcpy != NULL)
+  {
+    $trace_debug ("setting custom array `memcpy` hook: %p", hook_memcpy);
+    array->allocopts.hook_memcpy = hook_memcpy;
+  }
+  else
+    array->allocopts.hook_memcpy = memcpy;
+
+  if (hook_memmove != NULL)
+  {
+    $trace_debug ("setting custom array `memmove` hook: %p", hook_memmove);
+    array->allocopts.hook_memmove = hook_memmove;
+  }
+  else
+    array->allocopts.hook_memmove = memmove;
+}
+
+void
+array$set_free_hook (array_t array, array_free_fn_t hook_free)
+{
+  $trace_debug ("setting custom array `free` hook: %p", hook_free);
+  array->allocopts.hook_free = hook_free;
 }

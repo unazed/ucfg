@@ -61,13 +61,13 @@ read_insns_at_block (
 
 static cs_insn*
 read_insns_at_block_before (
-  cfg_gen_ctx_t ctx, size_t* insn_count, vertex_tag_t tag, uint64_t address)
+  cfg_gen_ctx_t ctx, size_t* insn_count, vertex_tag_t basic_tag, uint64_t address)
 {
-  auto block_rva = cfg$get_basic_block_rva (ctx->cfg, ctx->fn_tag, tag);
+  auto block_rva = cfg$get_basic_block_rva (ctx->cfg, ctx->fn_tag, basic_tag);
   $strict_assert (
     (block_rva <= address)
     && (address < block_rva
-        + cfg$get_basic_block_size (ctx->cfg, ctx->fn_tag, tag)),
+        + cfg$get_basic_block_size (ctx->cfg, ctx->fn_tag, basic_tag)),
     "Address specified not in bounds of block given");
   auto block_size = address - block_rva;
   auto insn_raw = pe$read_sized (ctx->pe, block_rva, block_size);
@@ -127,23 +127,34 @@ is_equal_ops (struct cs_x86_op* dst_loc, struct cs_x86_op* src_loc)
   }
 }
 
-static array_t /* struct cs_insn */
-trace_reg_dataflow (
-  cfg_gen_ctx_t ctx, vertex_tag_t block_tag, cs_insn* dep_insn,
-  cs_insn** out_insns, size_t* out_insn_count)
+static void /* struct cs_insn */
+trace_reg_block_dataflow (
+  cfg_gen_ctx_t ctx, vertex_tag_t basic_tag, cs_insn* insns,
+  size_t insn_count_or_depth, array_t df_insns, array_t tracked_regs,
+  array_t tracked_mem, array_t visited_blocks)
 {
-  size_t insn_count;
-  auto insns = read_insns_at_block_before (
-    ctx, &insn_count, block_tag, dep_insn->address);
-  auto df_insns = array$new (sizeof (struct cs_insn));
+  size_t insn_count = insn_count_or_depth;
+  size_t depth = 0;
 
-  /* store ptrs to operands so we can use `array`'s `*_rval` functions */
-  array_t tracked_regs = array$new (sizeof (enum x86_reg)),
-          tracked_mem = array$new (sizeof (struct x86_op_mem*));
+  if (array$contains_rval (visited_blocks, basic_tag))
+  {
+    $trace ("ALREADY VISITED BLOCK: %" PRIx64, basic_tag);
+    return;
+  }
+  array$append_rval (visited_blocks, basic_tag);
 
-  array$append_rval (tracked_regs, dep_insn->detail->x86.operands[0].reg);
+  if (insns == NULL)
+  {
+    if (insn_count_or_depth > MAX_DF_BLOCK_DEPTH)
+    {
+      $trace_err ("exceeded maximum dataflow analysis depth");
+      return;
+    }
+    depth = insn_count_or_depth;
+    insns = read_insns_at_block (ctx, &insn_count, basic_tag);
+  }
 
-  $trace ("BEGIN TRACING:");
+  $trace ("-> AT BLOCK (%zu insns): %" PRIx64, insn_count, basic_tag);
   for (ssize_t i = insn_count - 1; i >= 0; --i)
   {
     auto insn = &insns[i];
@@ -176,10 +187,87 @@ trace_reg_dataflow (
       $trace ("\t%s %s", insn->mnemonic, insn->op_str);
     }
   }
+  cs_free (insns, insn_count);
 
-  *out_insns = insns;
-  *out_insn_count = insn_count;
+  if (!array$is_empty (tracked_regs))
+  {
+    auto preds = cfg$get_preds (ctx->cfg, ctx->fn_tag, basic_tag);
+    if (array$is_empty (preds))
+      $trace ("NO PREDECESSOR BLOCKS...");
+    $array_for_each ($, preds, vertex_tag_t, pred)
+    {
+      trace_reg_block_dataflow (
+        ctx, *$.pred, NULL, depth + 1, df_insns, tracked_regs, tracked_mem,
+        visited_blocks);
+    }
+    array$free (preds);
+  }
+}
 
+static void
+df_insn_free (void* ptr)
+{
+  array_t array = ptr;
+  $array_for_each ($, array, struct cs_insn, insn)
+  {
+    $chk_free ($.insn->detail);
+  }
+}
+
+static void*
+cs_insn_memmove (
+  void* dst, const void* src, size_t n)
+{
+  const cs_insn* src_insn = src;
+  auto src_detail = src_insn->detail;
+  cs_insn* dst_insn = memmove (dst, src_insn, n);
+  if (src_detail != NULL)
+  {
+    dst_insn->detail = $chk_allocty (struct cs_detail*);
+    memmove (dst_insn->detail, src_detail, sizeof (struct cs_detail));
+  }
+  return dst_insn;
+}
+
+static void*
+cs_insn_memcpy (
+  void* restrict dst, const void* restrict src, size_t n)
+{
+  const cs_insn* src_insn = src; 
+  cs_insn* dst_insn = memcpy (dst, src_insn, n);
+  if (src_insn->detail != NULL)
+  {
+    dst_insn->detail = $chk_allocty (struct cs_detail*);
+    memcpy (dst_insn->detail, src_insn->detail, sizeof (struct cs_detail));
+  }
+  return dst_insn;
+}
+
+static array_t /* struct cs_insn (copy) */
+trace_reg_dataflow (
+  cfg_gen_ctx_t ctx, vertex_tag_t basic_tag, enum x86_reg dep_reg,
+  uint64_t address)
+{
+  size_t insn_count;
+  auto insns = read_insns_at_block_before (
+    ctx, &insn_count, basic_tag, address);
+  auto df_insns = array$new (sizeof (struct cs_insn));
+  array$set_copy_hooks (df_insns, cs_insn_memcpy, cs_insn_memmove);
+  array$set_free_hook (df_insns, df_insn_free);
+
+  /* store ptrs to operands so we can use `array`'s `*_rval` functions */
+  array_t tracked_regs = array$new (sizeof (enum x86_reg)),
+          tracked_mem = array$new (sizeof (struct x86_op_mem*));
+  array$append_rval (tracked_regs, dep_reg);
+
+  array_t visited_blocks = array$new (sizeof (vertex_tag_t));
+  $trace ("BEGIN TRACING (%s)", cs_reg_name (ctx->handle, dep_reg));
+  trace_reg_block_dataflow (
+    ctx, basic_tag, insns, insn_count, df_insns, tracked_regs, tracked_mem,
+    visited_blocks);
+  $trace ("FINISH TRACE.");
+
+  array$free (visited_blocks);
   array$free (tracked_regs);
   array$free (tracked_mem);
   return df_insns;
@@ -188,7 +276,7 @@ trace_reg_dataflow (
 static array_t /* struct cs_insn */
 trace_flag_dataflow (
   cfg_gen_ctx_t ctx, vertex_tag_t block_tag, cs_insn* branch_insn,
-  uint64_t* mod_flags, cs_insn** out_insns, size_t* out_insn_count)
+  uint64_t* mod_flags)
 {
   size_t insn_count;
   auto insns = read_insns_at_block_before (
@@ -215,7 +303,6 @@ trace_flag_dataflow (
       break;
     }
   }
-
   if (cmp_insn == NULL)
   {
     $trace (
@@ -225,10 +312,11 @@ trace_flag_dataflow (
     return NULL;
   }
 
-  auto df_insns = trace_reg_dataflow (
-    ctx, block_tag, cmp_insn, out_insns, out_insn_count);
+  auto cmp_reg = cmp_insn->detail->x86.operands[0].reg;
+  auto cmp_insn_addr = cmp_insn->address;
   cs_free (insns, insn_count);
-  return df_insns;
+
+  return trace_reg_dataflow (ctx, block_tag, cmp_reg, cmp_insn_addr);
 }
 
 static cs_insn*
@@ -307,23 +395,23 @@ dispatch_jump_imm (
 
   if (branch_insn->id != X86_INS_JMP)
   { /* is conditional jump? if so, check if reducible */
-    size_t insn_count;
     uint64_t mod_eflags;
-    cs_insn* insns;
-    auto df_flags = trace_flag_dataflow (
-      ctx, pred, branch_insn, &mod_eflags, &insns, &insn_count);
+    auto df_flags = trace_flag_dataflow (ctx, pred, branch_insn, &mod_eflags);
 
     jmp_targets[1] = branch_insn->address + branch_insn->size;
     if ((df_flags == NULL) || array$is_empty (df_flags))
     {
       $trace ("branch is indeterminate, continuing...");
+      if (df_flags != NULL)
+        array$free (df_flags);
       goto failed_df;
     }
     $trace ("found %zu flag dataflow instructions", array$length (df_flags));
 
-    if (cfg_sim$simulate_insns (ctx->sim, df_flags))
+    if (cfg_sim$simulate_insns (ctx->sim, ctx->fn_tag, df_flags))
     {
       auto sim_eflags = ctx->sim->fn.get_flags (ctx->sim->state);
+      $trace ("sim_eflags %" PRIx64 ", expected: %" PRIx64, sim_eflags, mod_eflags);
       if ((sim_eflags & mod_eflags) != mod_eflags)
       {  /* branch is never taken */
         $trace (
@@ -337,7 +425,6 @@ dispatch_jump_imm (
           jmp_targets[0]);
       jmp_targets[1] = 0;
     }
-    cs_free (insns, insn_count);
     array$free (df_flags);
   }
 
@@ -418,15 +505,9 @@ cfg_gen$recurse_branch_insns (
 
       case X86_OP_REG:
       {
-        /* N.B.: superset of `df_insns` since `trace_insn_dataflow` (probably)
-         *       can't `cs_free` them after copying them into an array, since
-         *       the `cs_insn[n].details->x86` member is dynamic, and we only
-         *       do a shallow copy for `df_insns`
-         */
-        cs_insn* insns;
-        size_t insn_count;
         auto df_insns = trace_reg_dataflow (
-          ctx, pred, branch_insn, &insns, &insn_count);
+          ctx, pred, branch_insn->detail->x86.operands[0].reg,
+          branch_insn->address);
         if (df_insns == NULL)
         {
           $trace ("failed to simulate dataflow, possibly indeterminate");
@@ -436,8 +517,7 @@ cfg_gen$recurse_branch_insns (
         $trace (
           "found %zu register dataflow instructions", array$length (df_insns));
 
-        auto success = cfg_sim$simulate_insns (ctx->sim, df_insns);
-        cs_free (insns, insn_count);
+        auto success = cfg_sim$simulate_insns (ctx->sim, ctx->fn_tag, df_insns);
         array$free (df_insns);
 
         if (!success || array$is_empty (df_insns))
