@@ -62,6 +62,7 @@ void* array$append_rval (array_t, uintmax_t memb);
 void* array$insert (array_t, size_t idx, void* ptrmemb);
 void array$remove (array_t, size_t idx);
 void array$remove_rval (array_t, uintmax_t memb);
+void array$remove_lval (array_t array, void* memb);
 void array$pop (array_t, void* into, size_t idx);
 void array$concat (array_t, array_t other);
 void* array$at (array_t, size_t idx);

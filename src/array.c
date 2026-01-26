@@ -235,6 +235,15 @@ array$remove_rval (array_t array, uintmax_t memb)
   return array$remove (array, idx);
 }
 
+void
+array$remove_lval (array_t array, void* memb)
+{
+  auto idx = array$find (array, memb);
+  if (idx == -1)
+    $abort ("tried to remove member which does not exist");
+  return array$remove (array, idx);
+}
+
 ssize_t
 array$find (array_t array, void* ptrmemb)
 {

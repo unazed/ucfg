@@ -10,18 +10,24 @@
   auto regloc = (sim_ctx)->fn.get_reg ((sim_ctx)->state, &regmask, (reg)); \
   if ((regloc) == NULL) \
   { \
-    $trace_err ("indeterminate register (%" PRIu16 ")", (reg)); \
+    $trace_err ( \
+      "indeterminate register (%s)", \
+      (sim_ctx)->fn.get_reg_name ((sim_ctx)->state, reg)); \
     return false; \
   }
 
 /* fwd. decl */
 typedef struct _cfg_sim_ctx *cfg_sim_ctx_t;
 
+bool
+sim_dispatch$resolve_memop (
+  cfg_sim_ctx_t, struct x86_op_mem* mem, uint64_t* out_sib);
+
 /* flag setting helpers */
 bool
 sim_dispatch$update_flags__arith (
-  cfg_sim_ctx_t, enum x86_reg reg, uint64_t op_1, uint64_t op_2,
-  bool is_sub);
+  cfg_sim_ctx_t sim_ctx, uint8_t reg_width, uint64_t result, uint64_t op_1,
+  uint64_t op_2, bool is_sub);
 bool sim_dispatch$update_flags__rot (
   cfg_sim_ctx_t, uint64_t shift, uint64_t val, uint8_t reg_width);
 bool sim_dispatch$update_flags__logic (cfg_sim_ctx_t, enum x86_reg reg);

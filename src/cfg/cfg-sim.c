@@ -1,6 +1,7 @@
 #include <x86intrin.h>
 
 #include "capstone/x86.h"
+#include "cfg/cfg.h"
 #include "cfg/insns/dispatch.h"
 #include "cfg/cfg-sim.h"
 #include "cfg/arch/x86.h"
@@ -18,7 +19,11 @@ init_state_fnptrs (cfg_sim_ctx_t sim_ctx, cs_arch arch)
         .get_reg = cfg_sim$x86$get_reg,
         .get_reg_indet = cfg_sim$x86$get_reg_indet,
         .get_reg_width = cfg_sim$x86$get_reg_width,
+        .get_reg_name = cfg_sim$x86$get_reg_name,
         .get_flags = cfg_sim$x86$get_flags,
+        .get_stack_frame = cfg_sim$x86$get_stack_frame,
+        .push_stack = cfg_sim$x86$push_stack,
+        .pop_stack = cfg_sim$x86$pop_stack,
         .set_reg = cfg_sim$x86$set_reg,
         .set_pc = cfg_sim$x86$set_pc,
         .set_flag = cfg_sim$x86$set_flag,
@@ -31,9 +36,10 @@ init_state_fnptrs (cfg_sim_ctx_t sim_ctx, cs_arch arch)
 }
 
 cfg_sim_ctx_t
-cfg_sim$new_context (cs_arch arch)
+cfg_sim$new_context (cfg_t cfg, cs_arch arch)
 {
   auto sim_ctx = $chk_allocty (cfg_sim_ctx_t);
+  sim_ctx->cfg = cfg;
   init_state_fnptrs (sim_ctx, arch);
   return sim_ctx;
 }
@@ -50,6 +56,9 @@ cfg_sim$simulate_insns (
   cfg_sim_ctx_t sim_ctx, vertex_tag_t fn_tag, array_t insns)
 {
   sim_ctx->fn.reset (sim_ctx->state);
+  auto stack_frame = cfg$new_stack_frame (sim_ctx->cfg, fn_tag);
+  sim_ctx->fn.set_reg (sim_ctx->state, X86_REG_RBP, (uintptr_t)stack_frame);
+  sim_ctx->fn.set_reg (sim_ctx->state, X86_REG_RSP, (uintptr_t)stack_frame);
   sim_ctx->fn_tag = fn_tag;
   $array_for_each($, insns, struct cs_insn, insn)
   {
@@ -66,15 +75,15 @@ cfg_sim$simulate_insns (
     auto op_2 = &$.insn->detail->x86.operands[1];
     switch ($.insn->detail->x86.op_count)
     {
-    #define $ret_if_false(expr) \
-      { \
-        if (!(expr)) \
-        { \
-          $trace_debug ("dispatch failed: " #expr); \
-          return false; \
-        } \
-        break; \
-      }
+#define $ret_if_false(expr) \
+  { \
+    if (!(expr)) \
+    { \
+      $trace_debug ("dispatch failed: " #expr); \
+      return false; \
+    } \
+    break; \
+  }
 
       case 0:
         $ret_if_false(sim_dispatch$nullop (sim_ctx, $.insn));
@@ -104,6 +113,7 @@ cfg_sim$simulate_insns (
         $abort (
           "unhandled insn. %s has %" PRIu8 " operands",
           $.insn->mnemonic, $.insn->detail->x86.op_count);
+#undef $ret_if_false
     }
   }
   return true;

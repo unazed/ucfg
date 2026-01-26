@@ -3,6 +3,8 @@
 #if defined(_WIN32) || defined(__MINGW32__) || defined(__MINGW64__) \
   || defined(__CYGWIN__)
 # include <Windows.h>
+# include <winnt.h>
+
   void*
   platform_load_library (const char* name)
   {
@@ -19,5 +21,11 @@
   platform_free_library (void* module)
   {
     FreeLibrary (module);
+  }
+
+  void*
+  platform_readgs (void)
+  {
+    return NtCurrentTeb ();
   }
 #endif

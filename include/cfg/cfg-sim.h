@@ -32,7 +32,11 @@ struct cfg_sim_ctx_fnptrs
   uint64_t* (*get_reg_indet)(void* state, uint64_t* mask, uint16_t reg);
 
   uint8_t (*get_reg_width)(void* state, uint16_t reg);
+  const char* (*get_reg_name)(void* state, uint16_t reg);
   uint64_t (*get_flags)(void* state);
+  uint8_t* (*get_stack_frame)(void* state);
+  void (*push_stack)(void* state, void* ptr, size_t size);
+  void (*pop_stack)(void* state, void* dst, size_t size);
   void (*set_reg)(void* state, uint16_t reg, uint64_t val);
   void (*set_pc)(void* state, uint64_t val);
   void (*set_flag)(void* state, uint64_t mask, bool to);
@@ -43,6 +47,7 @@ struct _cfg_sim_ctx
   array_t /* struct cs_insn */ insns;
   void* state;
   vertex_tag_t fn_tag;
+  cfg_t cfg;
   struct cfg_sim_ctx_fnptrs fn;
 };
 
@@ -51,7 +56,7 @@ typedef struct _cfg_sim_ctx *cfg_sim_ctx_t;
 void cfg_sim$free (cfg_sim_ctx_t);
 
 __attribute__ (( malloc (cfg_sim$free, 1) ))
-cfg_sim_ctx_t cfg_sim$new_context (cs_arch arch);
+cfg_sim_ctx_t cfg_sim$new_context (cfg_t cfg, cs_arch arch);
 
 bool cfg_sim$simulate_insns (
   cfg_sim_ctx_t, vertex_tag_t fn_tag, array_t /* struct cs_insn */ insns);

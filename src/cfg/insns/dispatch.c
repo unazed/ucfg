@@ -1,5 +1,6 @@
 #include "cfg/insns/dispatch.h"
 #include "cfg/cfg-sim.h"
+#include "platform.h"
 
 #define $set_flag(sim_ctx, flag, val) \
   ({ \
@@ -8,14 +9,42 @@
   })
 
 bool
-sim_dispatch$update_flags__arith (
-  cfg_sim_ctx_t sim_ctx, enum x86_reg reg, 
-  uint64_t op_1, uint64_t op_2, bool is_sub)
+sim_dispatch$resolve_memop (
+  cfg_sim_ctx_t sim_ctx, struct x86_op_mem* mem, uint64_t* out_sib)
 {
-  $get_regloc_chk(sim_ctx, reg, regloc, regmask);
+  uint64_t sib = mem->disp;
 
-  auto val = *regloc & regmask;
-  auto msb_mask = 1ull << (sim_ctx->fn.get_reg_width (sim_ctx->state, reg) - 1);
+  if (mem->base != X86_REG_INVALID)
+  {
+    $get_regloc_chk(sim_ctx, mem->base, base_regloc, base_mask);
+    sib += *base_regloc & base_mask;
+  }
+
+  if (mem->index != X86_REG_INVALID)
+  {
+    $get_regloc_chk(sim_ctx, mem->index, index_regloc, index_mask);
+    sib += (*index_regloc * mem->scale) & index_mask;
+  }
+
+  if (mem->segment == X86_REG_GS)
+  {
+    auto gs = platform_readgs ();
+    $trace ("resolved gs segment to %p", gs);
+    sib += (uintptr_t)gs;
+  }
+
+  *out_sib = sib;
+  return true;
+}
+
+bool
+sim_dispatch$update_flags__arith (
+  cfg_sim_ctx_t sim_ctx, uint8_t reg_width, uint64_t result, uint64_t op_1,
+  uint64_t op_2, bool is_sub)
+{
+  auto regmask = (reg_width == 64) ? ~0ull : ((1ull << reg_width) - 1);
+  auto val = result & regmask;
+  auto msb_mask = 1ull << (reg_width - 1);
   
   $set_flag(sim_ctx, EFLAGS_ZF, !val);
   $set_flag(sim_ctx, EFLAGS_SF, val & msb_mask);

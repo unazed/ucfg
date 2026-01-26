@@ -4,33 +4,56 @@
 #include "cfg/arch/x86.h"
 #include "capstone/x86.h"
 
+static const char* const map_regname[] = {
 #define REG_RAX (0)
+  [REG_RAX] = "rax",
 #define REG_RBX (1)
+  [REG_RBX] = "rbx",
 #define REG_RCX (2)
+  [REG_RCX] = "rcx",
 #define REG_RDX (3)
+  [REG_RDX] = "rdx",
 #define REG_RSI (4)
+  [REG_RSI] = "rsi",
 #define REG_RDI (5)
+  [REG_RDI] = "rdi",
 #define REG_RBP (6)
+  [REG_RBP] = "rbp",
 #define REG_RSP (7)
+  [REG_RSP] = "rsp",
 #define REG_R8  (8)
+  [REG_R8] = "r8",
 #define REG_R9  (9)
+  [REG_R9] = "r9",
 #define REG_R10 (10)
+  [REG_R10] = "r10",
 #define REG_R11 (11)
+  [REG_R11] = "r11",
 #define REG_R12 (12)
+  [REG_R12] = "r12",
 #define REG_R13 (13)
+  [REG_R13] = "r13",
 #define REG_R14 (14)
+  [REG_R14] = "r14",
 #define REG_R15 (15)
+  [REG_R15] = "r15",
 #define REG_RIP (16)
+  [REG_RIP] = "rip",
+};
 
 static uint64_t*
 get_regloc_mask (
   struct cfg_sim_state_x86* state, enum x86_reg reg, uint64_t* mask)
 {
-#define $case_regloc_mask(_case, _mask, idx) \
-  case _case: *mask = (_mask); return &state->gpregs[idx];
-  
+  uint64_t tmp; (void)tmp;
+  if (mask == NULL)
+    mask = &tmp;
+
   switch (reg)
   {
+#define $case_regloc_mask(_case, _mask, idx) \
+  case _case: *mask = (_mask); return &state->gpregs[idx];
+
     $case_regloc_mask(X86_REG_AL, REGMASK_LOWB, REG_RAX);
     $case_regloc_mask(X86_REG_AH, REGMASK_HIGHB, REG_RAX);
     $case_regloc_mask(X86_REG_AX, REGMASK_WORD, REG_RAX);
@@ -127,6 +150,17 @@ get_regloc_mask (
       $abort ("unrecognised x86 register: %d", reg);
 #undef $case_regloc_mask
   }
+}
+
+const char*
+cfg_sim$x86$get_reg_name (void* _state, uint16_t _reg)
+{
+  auto state = (struct cfg_sim_state_x86 *)_state;
+  auto reg = (enum x86_reg)_reg;
+
+  uint64_t mask; (void)mask;
+  auto reg_offs = get_regloc_mask (state, reg, &mask);
+  return map_regname[reg_offs - state->gpregs];
 }
 
 static inline bool
@@ -239,8 +273,34 @@ cfg_sim$x86$get_flags (void* _state)
   return ((struct cfg_sim_state_x86 *)_state)->flags;
 }
 
+uint8_t*
+cfg_sim$x86$get_stack_frame (void* _state)
+{
+  return *(uint8_t **)cfg_sim$x86$get_reg_indet (_state, NULL, X86_REG_RSP);
+}
+
+void
+cfg_sim$x86$push_stack (void* _state, void* ptr, size_t size)
+{
+  auto stack = cfg_sim$x86$get_stack_frame (_state);
+  stack = memcpy (stack - size, ptr, size);
+  cfg_sim$x86$set_reg (_state, X86_REG_RSP, (uintptr_t)stack);
+}
+
+void
+cfg_sim$x86$pop_stack (void* _state, void* dst, size_t size)
+{
+  auto stack = cfg_sim$x86$get_stack_frame (_state);
+  memcpy (dst, stack, size);
+  cfg_sim$x86$set_reg (_state, X86_REG_RSP, (uintptr_t)(stack + size));
+}
+
 void
 cfg_sim$x86$set_flag (void* _state, uint64_t mask, bool val)
 {
-  ((struct cfg_sim_state_x86 *)_state)->flags |= val << mask;
+  auto state = (struct cfg_sim_state_x86 *)_state;
+  if (val)
+    state->flags |= mask;
+  else
+    state->flags &= ~mask;
 }

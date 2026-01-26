@@ -122,11 +122,10 @@ uint8_t*
 stack$reserve (stack_t stack, size_t size)
 {
   maybe_extend_stack (stack, size);
-  auto ptr = stack->top;
   stack->top += size;
   stack->last_commit_size = size;
   stack->nmemb++;
-  return ptr;
+  return stack->top;
 }
 
 void

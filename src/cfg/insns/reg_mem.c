@@ -1,27 +1,24 @@
+#include "capstone/x86.h"
 #include "cfg/insns/dispatch.h"
 #include "cfg/cfg-sim.h"
 
 static bool
-lea_reg_mem (
-  cfg_sim_ctx_t sim_ctx, uint16_t dst_reg, uint16_t base_reg,
-  uint16_t index_reg, int scale, int64_t disp)
+lea_reg_mem (cfg_sim_ctx_t sim_ctx, uint16_t dst_reg, struct x86_op_mem* mem)
 {
-  uint64_t sib = disp;
-
-  if (base_reg != X86_REG_INVALID)
-  {
-    $get_regloc_chk(sim_ctx, base_reg, base_regloc, base_mask);
-    sib += *base_regloc & base_mask;
-  }
-
-  if (index_reg != X86_REG_INVALID)
-  {
-    $get_regloc_chk(sim_ctx, index_reg, index_regloc, index_mask);
-    sib += (*index_regloc * scale) & index_mask;
-  }
-  
+  uint64_t sib;
+  if (!sim_dispatch$resolve_memop (sim_ctx, mem, &sib))
+    return false;
   sim_ctx->fn.set_reg (sim_ctx->state, dst_reg, sib);
+  return true;
+}
 
+static bool
+mov_reg_mem (cfg_sim_ctx_t sim_ctx, uint16_t dst_reg, struct x86_op_mem* mem)
+{
+  uint64_t sib;
+  if (!sim_dispatch$resolve_memop (sim_ctx, mem, &sib))
+    return false;
+  sim_ctx->fn.set_reg (sim_ctx->state, dst_reg, *(uint64_t *)sib);
   return true;
 }
 
@@ -29,16 +26,15 @@ bool
 sim_dispatch$binop_reg_mem (cfg_sim_ctx_t sim_ctx, cs_insn* insn)
 {
   auto operands = insn->detail->x86.operands;
-  auto mem = operands[1].mem;
 
   switch (insn->id)
   {
-#define $binop_case(ins, fn) \
-  case ins: \
-    return fn ( \
-      sim_ctx, operands[0].reg, mem.base, mem.index, mem.scale, mem.disp);
+#define $binop_case(insn, fn) \
+  case insn: \
+    return fn (sim_ctx, operands[0].reg, &operands[1].mem);
 
     $binop_case (X86_INS_LEA, lea_reg_mem);
+    $binop_case (X86_INS_MOV, mov_reg_mem);
 
     default:
       $trace_err ("unhandled reg/mem. instruction (%s)", insn->mnemonic);

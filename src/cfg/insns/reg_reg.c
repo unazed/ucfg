@@ -20,14 +20,18 @@ movsxd_reg_reg (cfg_sim_ctx_t sim_ctx, uint16_t reg_dst, uint16_t reg_src)
 }
 
 static bool
-add_reg_reg (cfg_sim_ctx_t sim_ctx, uint16_t reg_dst, uint16_t reg_src)
+add_reg_reg (cfg_sim_ctx_t sim_ctx, uint16_t reg_a, uint16_t reg_b)
 {
-  $get_regloc_chk(sim_ctx, reg_dst, dst_loc, dst_mask);
-  $get_regloc_chk(sim_ctx, reg_src, src_loc, src_mask);
-  sim_ctx->fn.set_reg (
-    sim_ctx->state, reg_dst, (*dst_loc + *src_loc) & src_mask);
+  $get_regloc_chk(sim_ctx, reg_a, loc_a, mask_a);
+  $get_regloc_chk(sim_ctx, reg_b, loc_b, mask_b);
+  auto op_1 = *loc_a & mask_a;
+  auto op_2 = *loc_b & mask_b;
+  auto result = (op_1 + op_2) & mask_a;
+  auto reg_width = sim_ctx->fn.get_reg_width (sim_ctx->state, reg_a);
+  
+  sim_ctx->fn.set_reg (sim_ctx->state, reg_a, result);
   sim_dispatch$update_flags__arith (
-    sim_ctx, reg_dst, *dst_loc & dst_mask, *src_loc & src_mask, false);
+    sim_ctx, reg_width, result, op_1, op_2, false);
   return true;
 }
 
@@ -65,6 +69,23 @@ ror_reg_reg (cfg_sim_ctx_t sim_ctx, uint16_t reg_dst, uint16_t reg_src)
   return true;
 }
 
+static bool
+cmp_reg_reg (cfg_sim_ctx_t sim_ctx, uint16_t reg_a, uint16_t reg_b)
+{
+  $get_regloc_chk(sim_ctx, reg_a, loc_a, mask_a);
+  $get_regloc_chk(sim_ctx, reg_b, loc_b, mask_b);
+
+  auto op_1 = *loc_a & mask_a;
+  auto op_2 = *loc_b & mask_b;
+  $trace ("comparing %" PRIx64 " to %" PRIx64, op_1, op_2);
+  auto result = op_1 - op_2;
+  auto reg_width = sim_ctx->fn.get_reg_width (sim_ctx->state, reg_a);
+  
+  sim_dispatch$update_flags__arith (
+    sim_ctx, reg_width, result, op_1, op_2, true);
+  return true;
+}
+
 bool
 sim_dispatch$binop_reg_reg (cfg_sim_ctx_t sim_ctx, cs_insn* insn)
 {
@@ -80,6 +101,7 @@ sim_dispatch$binop_reg_reg (cfg_sim_ctx_t sim_ctx, cs_insn* insn)
     $binop_case (X86_INS_ADD, add_reg_reg);
     $binop_case (X86_INS_ROL, rol_reg_reg);
     $binop_case (X86_INS_ROR, ror_reg_reg);
+    $binop_case (X86_INS_CMP, cmp_reg_reg);
 
     default:
       $trace_err ("unhandled reg/reg. instruction (%s)", insn->mnemonic);

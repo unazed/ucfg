@@ -78,6 +78,81 @@ read_insns_at_block_before (
   return insns;
 }
 
+static bool
+branch_would_take (cs_insn* branch, uint64_t eflags)
+{
+  bool zf = !!(eflags & EFLAGS_ZF);
+  bool cf = !!(eflags & EFLAGS_CF);
+  bool sf = !!(eflags & EFLAGS_SF);
+  bool of = !!(eflags & EFLAGS_OF);
+  
+  switch (branch->id)
+  {
+    case X86_INS_JE:
+      return zf;
+    case X86_INS_JNE:
+      return !zf;
+    case X86_INS_JA:
+      return !cf && !zf;
+    case X86_INS_JAE:
+      return !cf;
+    case X86_INS_JB:
+      return cf;
+    case X86_INS_JBE:
+      return cf || zf;
+    case X86_INS_JG:
+      return !zf && (sf == of);
+    case X86_INS_JGE:
+      return sf == of;
+    case X86_INS_JL:
+      return sf != of;
+    case X86_INS_JLE:
+      return zf || (sf != of);
+    default:
+      return false;
+  }
+}
+
+static uint64_t
+get_insn_modified_flags (cs_insn* insn)
+{
+  auto eflags = insn->detail->x86.eflags;
+  uint64_t ret = 0;
+
+#define $check_modify(flag) \
+  if (eflags & (X86_EFLAGS_MODIFY_##flag | X86_EFLAGS_SET_##flag)) \
+    ret |= EFLAGS_##flag;
+
+  $check_modify(OF);
+  $check_modify(SF);
+  $check_modify(ZF);
+  $check_modify(PF);
+  $check_modify(CF);
+  $check_modify(AF);
+  $check_modify(DF);
+  $check_modify(IF);
+
+#undef $check_modify
+  return ret;
+}
+
+static uint64_t
+get_insn_tested_flags (cs_insn* insn)
+{
+  auto eflags = insn->detail->x86.eflags;
+  uint64_t ret = 0;
+
+  if (eflags & X86_EFLAGS_TEST_OF) ret |= EFLAGS_OF;
+  if (eflags & X86_EFLAGS_TEST_SF) ret |= EFLAGS_SF;
+  if (eflags & X86_EFLAGS_TEST_ZF) ret |= EFLAGS_ZF;
+  if (eflags & X86_EFLAGS_TEST_PF) ret |= EFLAGS_PF;
+  if (eflags & X86_EFLAGS_TEST_CF) ret |= EFLAGS_CF;
+  if (eflags & X86_EFLAGS_TEST_AF) ret |= EFLAGS_AF;
+  if (eflags & X86_EFLAGS_TEST_TF) ret |= EFLAGS_TF;
+
+  return ret;
+}
+
 static uint64_t
 get_insn_flags (cs_insn* insn)
 {
@@ -169,11 +244,60 @@ trace_reg_block_dataflow (
       continue;
     }
 
+    $trace_debug (
+      "CHECKING %s %s (read %" PRIu8 ", write %" PRIu8 ")",
+      insn->mnemonic, insn->op_str, regs_read_count, regs_write_count);
+
+    if (insn->detail->x86.op_count == 2)
+    {
+      auto operands = insn->detail->x86.operands;
+      auto op_1 = &operands[0];
+      auto op_2 = &operands[1];
+
+      if (op_1->type == X86_OP_MEM)
+      {
+        if (!array$contains (tracked_mem, &op_1->mem))
+        {
+          $trace_debug ("NO TRACKED MEM");
+          continue;
+        }
+        array$remove_lval (tracked_mem, &op_1->mem);
+        array$insert (df_insns, 0, insn);
+        $trace ("\t%s %s", insn->mnemonic, insn->op_str);
+        continue;
+      }
+      
+      if ((op_1->type == X86_OP_REG) && (op_2->type == X86_OP_MEM))
+      {
+        if (!array$contains_rval (tracked_regs, op_1->reg))
+        {
+          $trace_debug ("NO TRACKED REGS");
+          continue;
+        }
+        array$remove_rval (tracked_regs, op_1->reg);
+        if (op_2->mem.base != X86_REG_RIP)
+        {
+          array$append (tracked_mem, &op_2->mem);
+          if (op_2->mem.base != X86_REG_RSP)
+          {
+            array$append_rval (tracked_regs, op_2->mem.base);
+          }
+        }
+        array$insert (df_insns, 0, insn);
+        $trace ("\t%s %s", insn->mnemonic, insn->op_str);
+        continue;
+      }
+    }
+
     for (size_t i_wreg = 0; i_wreg < regs_write_count; ++i_wreg)
     {
+      /* if we're writing to a tracked register, then we can stop tracking it */
       auto wreg = regs_write[i_wreg];
       if (!array$contains_rval (tracked_regs, wreg))
+      {
+        $trace_debug ("NO TRACKED REGS");
         continue;
+      }
       $trace_debug (
         "no longer tracking register: %s", cs_reg_name (ctx->handle, wreg));
       array$remove_rval (tracked_regs, wreg);
@@ -186,6 +310,7 @@ trace_reg_block_dataflow (
       array$insert (df_insns, 0, insn);
       $trace ("\t%s %s", insn->mnemonic, insn->op_str);
     }
+
   }
   cs_free (insns, insn_count);
 
@@ -245,8 +370,8 @@ cs_insn_memcpy (
 
 static array_t /* struct cs_insn (copy) */
 trace_reg_dataflow (
-  cfg_gen_ctx_t ctx, vertex_tag_t basic_tag, enum x86_reg dep_reg,
-  uint64_t address)
+  cfg_gen_ctx_t ctx, vertex_tag_t basic_tag, enum x86_reg* dep_regs,
+   size_t dep_regs_count, uint64_t address)
 {
   size_t insn_count;
   auto insns = read_insns_at_block_before (
@@ -255,13 +380,13 @@ trace_reg_dataflow (
   array$set_copy_hooks (df_insns, cs_insn_memcpy, cs_insn_memmove);
   array$set_free_hook (df_insns, df_insn_free);
 
-  /* store ptrs to operands so we can use `array`'s `*_rval` functions */
   array_t tracked_regs = array$new (sizeof (enum x86_reg)),
-          tracked_mem = array$new (sizeof (struct x86_op_mem*));
-  array$append_rval (tracked_regs, dep_reg);
+          tracked_mem = array$new (sizeof (struct x86_op_mem));
+  for (size_t i = 0; i < dep_regs_count; ++i)
+    array$append_rval (tracked_regs, dep_regs[i]);
 
   array_t visited_blocks = array$new (sizeof (vertex_tag_t));
-  $trace ("BEGIN TRACING (%s)", cs_reg_name (ctx->handle, dep_reg));
+  $trace ("BEGIN TRACING");
   trace_reg_block_dataflow (
     ctx, basic_tag, insns, insn_count, df_insns, tracked_regs, tracked_mem,
     visited_blocks);
@@ -275,29 +400,27 @@ trace_reg_dataflow (
 
 static array_t /* struct cs_insn */
 trace_flag_dataflow (
-  cfg_gen_ctx_t ctx, vertex_tag_t block_tag, cs_insn* branch_insn,
-  uint64_t* mod_flags)
+  cfg_gen_ctx_t ctx, vertex_tag_t block_tag, cs_insn* branch_insn)
 {
   size_t insn_count;
   auto insns = read_insns_at_block_before (
     ctx, &insn_count, block_tag, branch_insn->address);
-  auto branch_flags = get_insn_flags (branch_insn);
-  *mod_flags = branch_flags;
+  auto branch_tested = get_insn_tested_flags (branch_insn);
 
   cs_insn* cmp_insn = NULL;
   for (ssize_t i = insn_count - 1; i >= 0; --i)
   {
     auto insn = &insns[i];
-    auto insn_flags = get_insn_flags (insn);
+    auto insn_modified = get_insn_modified_flags (insn);
 
     $trace_debug (
-      "%s %s (flags: %" PRIx64 ", real: %" PRIx64 ")",
-      insn->mnemonic, insn->op_str, insn_flags, insn->detail->x86.eflags);
+      "%s %s (modifies: %" PRIx64 ")",
+      insn->mnemonic, insn->op_str, insn_modified);
 
-    if ((insn_flags & branch_flags) == branch_flags)
+    if (insn_modified & branch_tested)
     {
       $trace (
-        "found insn. matching flag criteria: %s %s",
+        "found insn. modifying tested flags: %s %s",
         insn->mnemonic, insn->op_str);
       cmp_insn = insn;
       break;
@@ -312,11 +435,11 @@ trace_flag_dataflow (
     return NULL;
   }
 
-  auto cmp_reg = cmp_insn->detail->x86.operands[0].reg;
-  auto cmp_insn_addr = cmp_insn->address;
+  enum x86_reg dep_reg = X86_REG_EFLAGS;
+  auto cmp_insn_addr = cmp_insn->address + cmp_insn->size;
   cs_free (insns, insn_count);
 
-  return trace_reg_dataflow (ctx, block_tag, cmp_reg, cmp_insn_addr);
+  return trace_reg_dataflow (ctx, block_tag, &dep_reg, 1, cmp_insn_addr);
 }
 
 static cs_insn*
@@ -388,15 +511,14 @@ static bool
 dispatch_jump_imm (
   cfg_gen_ctx_t ctx, cs_insn* branch_insn, vertex_tag_t pred)
 {
-  int64_t jmp_targets[2] = {
+  int64_t jmp_targets[] = {
     branch_insn->detail->x86.operands[0].imm,  /* true branch */
     0  /* fallthrough, false branch */
   };
 
   if (branch_insn->id != X86_INS_JMP)
   { /* is conditional jump? if so, check if reducible */
-    uint64_t mod_eflags;
-    auto df_flags = trace_flag_dataflow (ctx, pred, branch_insn, &mod_eflags);
+    auto df_flags = trace_flag_dataflow (ctx, pred, branch_insn);
 
     jmp_targets[1] = branch_insn->address + branch_insn->size;
     if ((df_flags == NULL) || array$is_empty (df_flags))
@@ -411,8 +533,7 @@ dispatch_jump_imm (
     if (cfg_sim$simulate_insns (ctx->sim, ctx->fn_tag, df_flags))
     {
       auto sim_eflags = ctx->sim->fn.get_flags (ctx->sim->state);
-      $trace ("sim_eflags %" PRIx64 ", expected: %" PRIx64, sim_eflags, mod_eflags);
-      if ((sim_eflags & mod_eflags) != mod_eflags)
+      if (!branch_would_take (branch_insn, sim_eflags))
       {  /* branch is never taken */
         $trace (
           "opaque predicate resolved, branch to %" PRIx64 " never taken",
@@ -506,7 +627,7 @@ cfg_gen$recurse_branch_insns (
       case X86_OP_REG:
       {
         auto df_insns = trace_reg_dataflow (
-          ctx, pred, branch_insn->detail->x86.operands[0].reg,
+          ctx, pred, &branch_insn->detail->x86.operands[0].reg, 1,
           branch_insn->address);
         if (df_insns == NULL)
         {
@@ -518,13 +639,13 @@ cfg_gen$recurse_branch_insns (
           "found %zu register dataflow instructions", array$length (df_insns));
 
         auto success = cfg_sim$simulate_insns (ctx->sim, ctx->fn_tag, df_insns);
-        array$free (df_insns);
-
         if (!success || array$is_empty (df_insns))
         {
           $trace ("failed to simulate dataflow, possibly indeterminate");
+          array$free (df_insns);
           return false;
         }
+        array$free (df_insns);
 
         uint64_t reg_mask;
         auto reg_val = ctx->sim->fn.get_reg (
@@ -598,6 +719,6 @@ cfg_gen$new_context (pe_context_t pe_context, cfg_t cfg, csh handle)
   ctx->pe = pe_context;
   ctx->cfg = cfg;
   ctx->handle = handle;
-  ctx->sim = cfg_sim$new_context (CS_ARCH_X86);
+  ctx->sim = cfg_sim$new_context (cfg, CS_ARCH_X86);
   return ctx;
 }

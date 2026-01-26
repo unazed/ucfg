@@ -40,4 +40,5 @@ __attribute__(( malloc(array$free, 1) ))
 array_t cfg$get_preds (cfg_t, vertex_tag_t fn_tag, vertex_tag_t basic_tag);
 array_t cfg$get_succs (cfg_t, vertex_tag_t fn_tag, vertex_tag_t basic_tag);
 
-uint8_t* cfg$get_stack_frame (cfg_t, vertex_tag_t fn_tag);
+uint8_t* cfg$new_stack_frame (cfg_t, vertex_tag_t fn_tag);
+void cfg$free_stack_frame (cfg_t, vertex_tag_t fn_tag);
